@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Audit Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/vendor/chart.umd.min.js" defer></script>
+  <script src="/static/i18n.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar hidden" id="topbar">
+    <div class="brand"><span class="logo">AI</span><span data-t="appName">AI Audit Dashboard</span></div>
+    <div class="crumb" id="crumb"></div>
+    <div class="top-actions">
+      <span class="pill" id="aiPill"></span>
+      <button class="ghost sm" id="langBtn">عربي</button>
+      <button class="ghost sm" id="themeBtn" title="Theme">◐</button>
+      <span class="pill" id="userPill"></span>
+      <button class="sm" id="logoutBtn" data-t="logout">Log out</button>
+    </div>
+  </header>
+  <main id="app"></main>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+</body>
+</html>
