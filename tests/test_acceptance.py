@@ -296,6 +296,10 @@ def test_13_arabic_firm_template_structure(ctx):
     c.patch(f"/api/invoices/{iid}/manual", json={"gdn_issued": "Yes", "price_list_matched": "No", "explanation": "Auditor note"})
     r = c.post(f"/api/engagements/{eid}/export/workpaper")
     assert r.status_code == 200 and "exchange rate" in r.headers.get("X-Workpaper-Warnings", "").replace("%20", " ")
+    from urllib.parse import quote
+    assert quote("شركة_الأفق") in r.headers["content-disposition"]          # Arabic client name kept in file name
+    pdf = c.get(f"/api/engagements/{eid}/export/findings.pdf")
+    assert "filename*=UTF-8''" + quote("شركة_الأفق") in pdf.headers["content-disposition"]
     out = TMP / "wp_ar.xlsx"; out.write_bytes(r.content)
     o = load_workbook(PACK / "Sales_Vouching_AR_Template.xlsx")["Sales Vouching"]
     ws = load_workbook(out)["Sales Vouching"]

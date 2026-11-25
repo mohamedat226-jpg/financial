@@ -49,6 +49,12 @@ HEADER_SYNONYMS = {
 YES_NO_AR = {"Yes": ["نعم", "yes", "y"], "No": ["لا", "no", "n"], "N/A": ["لا ينطبق", "غير منطبق", "n/a", "na"]}
 
 
+def safe_filename(name: str, limit: int = 40) -> str:
+    """Keep Latin and Arabic letters/digits; replace anything else (spaces, slashes, punctuation)."""
+    s = re.sub(r"[^\w\u0600-\u06FF-]+", "_", str(name or ""), flags=re.UNICODE).strip("_")
+    return (s[:limit].strip("_")) or "client"
+
+
 class TemplateError(Exception):
     pass
 
@@ -306,7 +312,7 @@ def generate(eid: int, user: str, final: bool = False) -> dict:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     src = Path(tf["stored_path"])
     tag = "FINAL" if final else "DRAFT"
-    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", eng["client_name"])[:40]
+    safe = safe_filename(eng["client_name"])
     out = config.OUTPUT_DIR / f"E{eid}_{safe}_FY{eng['financial_year']}_Sales_Vouching_{tag}_{stamp}{src.suffix}"
     shutil.copyfile(src, out)   # original upload is never opened for writing
     wb = load_workbook(out, keep_vba=src.suffix.lower() == ".xlsm")
