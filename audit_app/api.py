@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
 import re
 import stat
@@ -307,17 +308,12 @@ def set_fx(eid: int, body: FxIn, user=Depends(require("configure"))):
 def upload_template(eid: int, file: UploadFile = File(...), user=Depends(require("edit"))):
     _open(eid)
     info = _store(eid, file, "template", user["username"])
-    from openpyxl import load_workbook
     try:
-        wb = load_workbook(info["path"])
-        ws, hr, mp = workpaper.locate(wb)
-        totals = workpaper._find_totals_row(ws, hr, mp)
+        meta = workpaper.inspect_template(info["path"], _eng(eid))
     except workpaper.TemplateError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"Cannot read workbook: {e}")
-    meta = {"sheet": ws.title, "header_row": hr, "mapping": mp, "totals_row": totals,
-            "capacity": (totals - hr - 1) if totals else None, "sheets": wb.sheetnames}
     with db.tx() as c:
         c.execute("UPDATE files SET meta=? WHERE id=?", (db.jdump(meta), info["id"]))
     return {**info, "meta": meta}
@@ -730,8 +726,11 @@ def export_workpaper(eid: int, user=Depends(require("edit"))):
         res = workpaper.generate(eid, user["username"], final=e["status"] == "finalized")
     except workpaper.TemplateError as ex:
         raise HTTPException(400, str(ex))
+    from urllib.parse import quote
     return FileResponse(res["path"], filename=res["name"],
-                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"X-Workpaper-Warnings": quote(json.dumps(res["warnings"], ensure_ascii=False)),
+                                 "Access-Control-Expose-Headers": "X-Workpaper-Warnings"})
 
 
 @app.get("/api/engagements/{eid}/export/{kind}")

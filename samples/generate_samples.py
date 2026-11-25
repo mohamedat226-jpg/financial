@@ -271,6 +271,58 @@ def build_template(path: Path, data_rows=10):
     wb.save(path)
 
 
+def build_template_ar(path: Path, data_rows=20):
+    """Arabic, right-to-left working paper mirroring a typical firm layout: title block, objective/risk
+    table, tolerance input cell, header + legend + section rows, row formulas (J, K, P), totals, work
+    done, conclusion and notes. Fictitious content."""
+    from openpyxl.formatting.rule import Rule
+    from openpyxl.styles.differential import DifferentialStyle
+    from openpyxl.worksheet.datavalidation import DataValidation
+    wb = Workbook(); ws = wb.active; ws.title = "Sales Vouching"; ws.sheet_view.rightToLeft = True
+    thin = Side(style="thin"); bd = Border(left=thin, right=thin, top=thin, bottom=thin)
+    ws["A1"] = "شركة الأفق النموذجية للتجارة (بيانات وهمية)"; ws.merge_cells("A1:C1")
+    ws["A2"] = "للسنة المنتهية في 31 ديسمبر 2025"; ws.merge_cells("A2:C2")
+    ws["A3"] = "المبيعات / الإيرادات"; ws["A4"] = "إعادة احتساب المبيعات"
+    ws["F4"] = "إعداد:"; ws["G4"] = "مُعِدّ الورقة"; ws["F5"] = "مراجعة:"; ws["G5"] = "المراجع"
+    for i, (k, v) in enumerate([("الهدف", "إعادة حساب المبيعات / الإيرادات"), ("الخطر", "مخاطر التحريف الجوهري في المبيعات"),
+                                ("المصدر", "سجل المبيعات"), ("التأكيدات", "الحدوث والدقة"), ("النطاق", "Refer template"),
+                                ("الطبيعة", "اختبار التفاصيل"), ("التوقيت", "قبل إصدار تقرير المراجعة")], start=6):
+        ws.cell(i, 1, k); ws.cell(i, 2, v); ws.merge_cells(start_row=i, start_column=2, end_row=i, end_column=6)
+    ws["A13"] = "حد التسامح (ريال)"; ws["B13"] = 1; ws["C13"] = "تفاوت التقريب المسموح به عند المقارنة"
+    hdr = ["S.no", "اسم العميل", "نوع المنتج", "المبلغ", "المبلغ كما في الفاتورة", "عملة الفاتورة", "تاريخ الفاتورة",
+           "رقم الفاتورة", "معدل الصرف", "المبلغ بالريال السعودي", "الفرق", "تم إصدار إشعار إرسال البضائع",
+           "تاريخ إشعار إرسال البضائع", "مطابقة سعر البيع مع القائمة المعتمدة", "تمت الموافقة على الفاتورة",
+           "سبب الاختلاف ، إذا كان جوهري"]
+    legend = [None, "سجل الإيرادات", "سجل الإيرادات", "A = سجل الإيرادات", "B = الفاتورة", "الفاتورة", "الفاتورة", "الفاتورة",
+              "C = Reputable Site", "D = B*C", "E = A - D", "نعم / لا", "GDN", "نعم / لا", "Approval", "Description"]
+    for j, (h, l) in enumerate(zip(hdr, legend), start=1):
+        ws.cell(15, j, h).font = Font(bold=True); ws.cell(15, j).border = bd
+        ws.cell(16, j, l).border = bd
+    ws["A17"] = "Target Testing"; ws.merge_cells("A17:B17")
+    first, last = 18, 18 + data_rows - 1
+    for r in range(first, last + 1):
+        ws.cell(r, 1, r - first + 1); ws.cell(r, 2, "عميل نموذجي"); ws.cell(r, 3, "المبيعات")
+        ws.cell(r, 4, 1000.0); ws.cell(r, 5, 1000.0); ws.cell(r, 6, "SAR"); ws.cell(r, 8, f"SMP/{r}"); ws.cell(r, 9, 1)
+        ws.cell(r, 10, f"=E{r}*I{r}"); ws.cell(r, 11, f'=IF(D{r}="","",D{r}-J{r})')
+        ws.cell(r, 16, f'=IF(D{r}="","أدخل مبلغ سجل الإيرادات",IF(ABS(K{r})<=$B$13,"لا يوجد اختلافات","يوجد اختلاف - يُراجع"))')
+        ws.cell(r, 7).number_format = "yyyy/mm/dd"
+        for j in range(1, 17):
+            ws.cell(r, j).border = bd
+    tr = last + 1
+    ws.cell(tr, 1, "الإجمالي"); ws.merge_cells(start_row=tr, start_column=1, end_row=tr, end_column=3)
+    for col in "DEJK":
+        ws[f"{col}{tr}"] = f"=SUM({col}{first}:{col}{last})"
+    dv = DataValidation(type="list", formula1='"نعم,لا"', allow_blank=True)
+    dv.add(f"L{first}:L{last}"); dv.add(f"N{first}:N{last}"); ws.add_data_validation(dv)
+    ws.conditional_formatting.add(f"H{first}:H{last + 70}", Rule(type="duplicateValues", dxf=DifferentialStyle(font=Font(color="9C0006"))))
+    ws.cell(tr + 2, 1, "Work Done"); ws.merge_cells(start_row=tr + 2, start_column=1, end_row=tr + 2, end_column=5)
+    ws.cell(tr + 3, 1, "الحصول على سجل المبيعات من العميل ؛")
+    ws.cell(tr + 5, 1, "الخلاصة "); ws.merge_cells(start_row=tr + 5, start_column=1, end_row=tr + 5, end_column=2)
+    ws.cell(tr + 7, 1, "ملاحظات على الورقة: أعمدة إشعار إرسال البضائع ومطابقة السعر والموافقة تُترك لمُعِدّ الورقة.")
+    ws.freeze_panes = "C18"
+    wb.save(path)
+
+
 def build_ledger(invs, out_dir: Path, rng):
     rows = []
     fx = {"SAR": 1.0, "USD": 3.75, "EUR": 4.05}
@@ -316,6 +368,7 @@ def main(out=None):
                       "taxable_amount": inv["taxable"], "vat_amount": inv["vat"], "gross_amount": inv["gross"],
                       "doc_type": inv["doc_type"], "layout": inv["layout"], "scanned": bool(inv.get("scanned"))})
     build_template(out_dir / "Sales_Vouching_Invoices_Sample.xlsx")
+    build_template_ar(out_dir / "Sales_Vouching_AR_Template.xlsx")
     build_ledger(invs, out_dir, rng)
     (out_dir / "ground_truth.json").write_text(json.dumps(truth, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Wrote {len(invs)} invoices, template and ledger to {out_dir}")

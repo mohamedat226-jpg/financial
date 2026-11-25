@@ -43,7 +43,9 @@ async function blobOf(method, path) {
 }
 async function download(method, path) {
   try {
-    const { blob, name } = await blobOf(method, path);
+    const { blob, name, headers } = await blobOf(method, path);
+    const wh = headers.get("X-Workpaper-Warnings");
+    if (wh) { const ws = JSON.parse(decodeURIComponent(wh)).filter((w) => !w.startsWith("DRAFT")); if (ws.length) toast("⚠ " + ws.join(" • "), true); }
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   } catch (e) { toast(e.message, true); }
@@ -169,7 +171,7 @@ function viewSetup(v) {
   const tf = files.find((f) => f.kind === "template"), lf = files.find((f) => f.kind === "ledger");
   const p = S.progress, done = p.total - (p.queued || 0) - (p.processing || 0);
   v.innerHTML = `<div class="grid g3">
-    ${uploadCard("template", ".xlsx,.xlsm", false, tf ? `<div class="small"><b>${esc(tf.original_name)}</b><br>Sheet “${esc(tf.meta.sheet)}”, header row ${esc(tf.meta.header_row)}, ${tf.meta.capacity ?? "∞"} data rows${tf.meta.totals_row ? `, totals row ${esc(tf.meta.totals_row)}` : ""}<br><span class="mono">SHA-256 ${esc(tf.sha256.slice(0, 16))}…</span></div>` : "")}
+    ${uploadCard("template", ".xlsx,.xlsm", false, tf ? `<div class="small"><b>${esc(tf.original_name)}</b><br>Sheet “${esc(tf.meta.sheet)}”, header row ${esc(tf.meta.header_row)}, data rows ${esc(tf.meta.first_data_row)}–${tf.meta.totals_row ? tf.meta.totals_row - 1 : "…"} (${tf.meta.capacity ?? "∞"})${tf.meta.tolerance_cell ? `, tolerance cell ${esc(tf.meta.tolerance_cell)}` : ""}${tf.meta.totals_row ? `, totals row ${esc(tf.meta.totals_row)}` : ""}<br><span class="mono">SHA-256 ${esc(tf.sha256.slice(0, 16))}…</span>${(tf.meta.warnings || []).length ? `<div class="notice warn" style="margin-top:6px">${tf.meta.warnings.map(esc).join("<br>")}</div>` : ""}</div>` : "")}
     ${uploadCard("ledger", ".xlsx,.xlsm,.xls,.csv", false, lf ? `<div class="small"><b>${esc(lf.original_name)}</b> – ${esc(lf.meta.rows)} rows<br>${Object.entries(lf.meta.mapping || {}).map(([k, h]) => `${esc(k)} ← “${esc(h)}”`).join(", ")}${(lf.meta.warnings || []).length ? `<div class="notice warn" style="margin-top:6px">${lf.meta.warnings.map(esc).join("<br>")}</div>` : ""}</div>` : `<div class="small muted">Without a ledger, column D stays blank (never estimated).</div>`)}
     ${uploadCard("invoices", ".pdf", true, `<div class="small">${t("progress")}: <span id="extractTxt">${done} / ${p.total}</span></div><div class="progress"><i id="extractBar" style="width:${p.total ? (100 * done) / p.total : 0}%"></i></div>
       <div class="row small" style="margin-top:6px">${Object.entries(p).filter(([k]) => k !== "total").map(([k, n]) => statusBadge(k) + " " + n).join(" ")}</div>`)}

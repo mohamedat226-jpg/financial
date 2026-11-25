@@ -274,3 +274,45 @@ def test_12_rbac(ctx):
         iid = _rows(c, eid)["rows"][0]["invoice_id"]
         assert v.patch(f"/api/invoices/{iid}/fields", json={"field": "currency", "value": "USD"}).status_code == 403
     assert TestClient(app).get(f"/api/engagements/{eid}/rows").status_code == 401
+
+
+def test_13_arabic_firm_template_structure(ctx):
+    """Arabic RTL template with legend/section rows, tolerance cell, P-column formula, yes/no validation,
+    duplicate-number conditional format; 20 template rows vs 50 invoices forces row insertion."""
+    c, _ = ctx
+    eid = c.post("/api/engagements", json={"client_name": "شركة الأفق النموذجية للتجارة", "financial_year": "2025",
+                                           "fy_start": "2025-01-01", "fy_end": "2025-12-31", "tolerance": 2}).json()["id"]
+    with open(PACK / "Sales_Vouching_AR_Template.xlsx", "rb") as fh:
+        meta = c.post(f"/api/engagements/{eid}/template", files={"file": ("ar.xlsx", fh)}).json()["meta"]
+    assert (meta["header_row"], meta["first_data_row"], meta["totals_row"], meta["capacity"]) == (15, 18, 38, 20)
+    assert meta["tolerance_cell"] == "B13" and meta["existing_rows"] == 20 and len(meta["mapping"]) == 16
+    with open(PACK / "Sales_Ledger_FY2025.csv", "rb") as fh:
+        assert c.post(f"/api/engagements/{eid}/ledger", files={"file": ("l.csv", fh)}).status_code == 200
+    files = [("files", (p.name, open(p, "rb"), "application/pdf")) for p in sorted((PACK / "invoices").glob("*.pdf"))]
+    c.post(f"/api/engagements/{eid}/invoices", files=files)
+    _wait(c, eid)
+    rows = _rows(c, eid)["rows"]
+    iid = _by_no(rows, "INV-2025-0004")[0]["invoice_id"]
+    c.patch(f"/api/invoices/{iid}/manual", json={"gdn_issued": "Yes", "price_list_matched": "No", "explanation": "Auditor note"})
+    r = c.post(f"/api/engagements/{eid}/export/workpaper")
+    assert r.status_code == 200 and "exchange rate" in r.headers.get("X-Workpaper-Warnings", "").replace("%20", " ")
+    out = TMP / "wp_ar.xlsx"; out.write_bytes(r.content)
+    o = load_workbook(PACK / "Sales_Vouching_AR_Template.xlsx")["Sales Vouching"]
+    ws = load_workbook(out)["Sales Vouching"]
+    for rr in range(1, 18):                                         # title, objective table, header, legend, section rows
+        for cc in range(1, 17):
+            if (rr, cc) != (13, 2):
+                assert ws.cell(rr, cc).value == o.cell(rr, cc).value, (rr, cc)
+    assert ws["B13"].value == 2                                     # engagement tolerance drives the template's P formula
+    assert ws.sheet_view.rightToLeft and ws.freeze_panes == "C18"
+    assert ws["A68"].value == "الإجمالي" and ws["D68"].value == "=SUM(D18:D67)" and ws["K68"].value == "=SUM(K18:K67)"
+    assert ws["A70"].value == "Work Done" and ws["A73"].value == "الخلاصة "
+    assert {"A68:C68", "A70:E70", "A73:B73", "A17:B17", "A1:C1"} <= {str(m) for m in ws.merged_cells.ranges}
+    assert ws["J67"].value == "=E67*I67"                            # template row formulas replicated into inserted rows
+    assert ws["P67"].value.startswith('=IF(D67="","') and "$B$13" in ws["P67"].value
+    assert str(ws.data_validations.dataValidation[0].sqref) == "L18:L67 N18:N67"
+    assert str(list(ws.conditional_formatting)[0].sqref) == "H18:H137"
+    rr = 18 + [x["invoice_id"] for x in rows].index(iid)
+    assert ws[f"L{rr}"].value == "نعم" and ws[f"N{rr}"].value == "لا" and ws[f"M{rr}"].value is None
+    assert ws[f"P{rr}"].value.startswith("=") and "Auditor note" in ws[f"P{rr}"].comment.text
+    assert ws["H18"].value == rows[0]["invoice_number"] and ws["E18"].value == rows[0]["invoice_amount"]

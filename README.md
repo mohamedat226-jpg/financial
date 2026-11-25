@@ -77,7 +77,17 @@ under your engagement terms and client confidentiality obligations before enabli
 
 ## Working-paper integration
 
-* The `Sales Vouching` sheet and header row are located by heading text, so column positions are taken from the template.
+* The `Sales Vouching` sheet and header row are located by heading text (English or Arabic, e.g. «اسم العميل»،
+  «المبلغ كما في الفاتورة»، «رقم الفاتورة»), so column positions are taken from the template. Legend / sub-heading /
+  section rows between the header and the first data row (e.g. «A = سجل الإيرادات», "Target Testing") are detected and left untouched.
+* On upload the template is inspected and the auditor is warned about: existing sample rows, a header that does not name
+  the engagement client or year, and a tolerance input cell (e.g. «حد التسامح» in B13) that differs from the engagement.
+  On export the engagement tolerance is written to that input cell (logged) so the template's own formulas agree with the app.
+* Template row formulas in any column (e.g. a status formula in P) are preserved; when rows are inserted they are
+  replicated (translated) into the new rows. An auditor explanation for a column that holds a formula is attached as a cell comment.
+* Yes / No evidence is written in the form the template's data-validation list accepts (e.g. «نعم» / «لا»).
+* The export lists warnings (missing exchange rates, missing amounts, unconfirmed AI values, draft status) in the
+  `AI Audit Summary` sheet and in the UI.
 * Data rows are written between the header and the totals row. If more rows are needed, rows are inserted above
   the totals row and **all references are shifted**: formulas in every sheet (SUM ranges extended), merged cells,
   data validations, conditional formats, defined names and print area.

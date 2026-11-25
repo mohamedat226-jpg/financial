@@ -22,24 +22,31 @@ from . import config, db, engine
 from .extraction.normalize import norm_text, to_date
 
 HEADER_SYNONYMS = {
-    "A": ["s.no", "s no", "sno", "serial", "sr", "sr.", "#", "no.", "م", "رقم تسلسلي"],
+    "A": ["s.no", "s no", "sno", "serial", "sr", "sr.", "#", "no.", "م", "رقم تسلسلي", "الرقم التسلسلي"],
     "B": ["customer name", "customer", "client name", "اسم العميل", "العميل"],
-    "C": ["product type", "product", "description", "نوع المنتج"],
-    "D": ["ledger amount", "amount per ledger", "ledger", "المبلغ حسب الدفتر"],
+    "C": ["product type", "product", "description", "نوع المنتج", "المنتج"],
+    "D": ["ledger amount", "amount per ledger", "ledger", "المبلغ", "المبلغ حسب الدفتر", "المبلغ حسب السجل",
+          "المبلغ - سجل الايرادات", "مبلغ سجل الايرادات"],
     "E": ["invoice amount excluding vat", "invoice amount excl vat", "invoice amount (excluding vat)", "invoice amount",
-          "مبلغ الفاتوره غير شامل الضريبه"],
-    "F": ["invoice currency", "currency", "العمله"],
+          "المبلغ كما في الفاتوره", "مبلغ الفاتوره غير شامل الضريبه", "مبلغ الفاتوره"],
+    "F": ["invoice currency", "currency", "عمله الفاتوره", "العمله"],
     "G": ["invoice date", "date", "تاريخ الفاتوره"],
     "H": ["invoice number", "invoice no", "رقم الفاتوره"],
-    "I": ["exchange rate", "fx rate", "سعر الصرف"],
-    "J": ["amount in sar", "amount sar", "المبلغ بالريال"],
+    "I": ["exchange rate", "fx rate", "معدل الصرف", "سعر الصرف"],
+    "J": ["amount in sar", "amount sar", "المبلغ بالريال السعودي", "المبلغ بالريال"],
     "K": ["difference", "variance", "الفرق"],
-    "L": ["goods delivery note issued", "gdn issued", "delivery note issued"],
-    "M": ["goods delivery note date", "gdn date", "delivery note date"],
-    "N": ["selling price matched with approved price list", "price list", "selling price matched"],
-    "O": ["invoice approved", "approved"],
-    "P": ["explanation of material differences", "explanation", "comments", "التوضيح"],
+    "L": ["goods delivery note issued", "gdn issued", "delivery note issued", "تم اصدار اشعار ارسال البضائع",
+          "اشعار ارسال البضائع", "تم اصدار اشعار التسليم"],
+    "M": ["goods delivery note date", "gdn date", "delivery note date", "تاريخ اشعار ارسال البضائع", "تاريخ اشعار التسليم"],
+    "N": ["selling price matched with approved price list", "price list", "selling price matched",
+          "مطابقه سعر البيع مع القائمه المعتمده", "مطابقه سعر البيع"],
+    "O": ["invoice approved", "approved", "تمت الموافقه علي الفاتوره", "اعتماد الفاتوره"],
+    "P": ["explanation of material differences", "explanation", "comments", "التوضيح", "سبب الاختلاف ، اذا كان جوهري",
+          "سبب الاختلاف"],
 }
+
+# Values accepted by Arabic yes/no validation lists in templates
+YES_NO_AR = {"Yes": ["نعم", "yes", "y"], "No": ["لا", "no", "n"], "N/A": ["لا ينطبق", "غير منطبق", "n/a", "na"]}
 
 
 class TemplateError(Exception):
@@ -73,16 +80,86 @@ def locate(wb):
                         "'Customer Name', 'Invoice Amount Excluding VAT', 'Invoice Number').")
 
 
+def first_data_row(ws, header_row, mapping) -> int:
+    """Skip legend / sub-heading / section rows between the header and the first data row."""
+    cols = [column_index_from_string(c) for c in mapping.values()]
+    jk = [column_index_from_string(mapping[x]) for x in ("J", "K") if x in mapping]
+    a_col = column_index_from_string(mapping.get("A", "A"))
+    for r in range(header_row + 1, header_row + 12):
+        vals = [ws.cell(r, c).value for c in cols]
+        if all(v in (None, "") for v in vals):
+            return r
+        if any(isinstance(ws.cell(r, c).value, str) and ws.cell(r, c).value.startswith("=") for c in jk):
+            return r
+        if isinstance(ws.cell(r, a_col).value, (int, float)):
+            return r
+    return header_row + 1
+
+
+_TOTAL_RE = re.compile(r"(^|\s)(total|grand total|الاجمالي|المجموع|اجمالي)(\s|:|$)")
+
+
 def _find_totals_row(ws, header_row, mapping) -> int | None:
     cols = [column_index_from_string(c) for c in mapping.values()]
-    for r in range(header_row + 1, ws.max_row + 1):
+    start = first_data_row(ws, header_row, mapping)
+    for r in range(start, ws.max_row + 1):
         for c in cols:
             v = ws.cell(r, c).value
             if isinstance(v, str):
                 n = _cell_norm(v)
-                if re.search(r"\btotal\b|الاجمالي|المجموع", n) or re.match(r"=\s*sum\(", v.strip().lower()):
+                if _TOTAL_RE.search(n) or re.match(r"=\s*sum\(", v.strip().lower()):
                     return r
     return None
+
+
+def find_tolerance_cell(ws, header_row):
+    """A numeric input cell next to a 'tolerance' label above the table (formulas may reference it)."""
+    for r in range(1, header_row):
+        for c in range(1, min(ws.max_column, 20) + 1):
+            n = _cell_norm(ws.cell(r, c).value)
+            if n and re.search(r"tolerance|حد التسامح|التسامح", n):
+                for cc in range(c + 1, c + 4):
+                    v = ws.cell(r, cc).value
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        return ws.cell(r, cc).coordinate
+    return None
+
+
+def inspect_template(path: str, eng: dict | None = None) -> dict:
+    """Structure + warnings shown to the auditor when the template is uploaded."""
+    wb = load_workbook(path)
+    ws, hr, mp = locate(wb)
+    first = first_data_row(ws, hr, mp)
+    totals = _find_totals_row(ws, hr, mp)
+    last = (totals - 1) if totals else ws.max_row
+    existing = sum(1 for r in range(first, last + 1)
+                   if any(ws[f"{mp[x]}{r}"].value not in (None, "") and not str(ws[f"{mp[x]}{r}"].value).startswith("=")
+                          for x in ("B", "E", "H") if x in mp))
+    formulas = {x: ws[f"{mp[x]}{first}"].value for x in mp
+                if isinstance(ws[f"{mp[x]}{first}"].value, str) and ws[f"{mp[x]}{first}"].value.startswith("=")}
+    tol = find_tolerance_cell(ws, hr)
+    warnings = []
+    if existing:
+        warnings.append(f"Template already contains {existing} data row(s); their constant values will be replaced in the "
+                        "output copy (formulas kept). The uploaded file itself is not changed.")
+    if tol and eng and float(ws[tol].value) != float(eng["tolerance"]):
+        warnings.append(f"Template tolerance {ws[tol]} = {ws[tol].value} differs from the engagement tolerance "
+                        f"{eng['tolerance']}; the engagement value will be written to {tol} on export.")
+    if eng:
+        title = " ".join(str(ws.cell(r, c).value) for r in range(1, min(hr, 4)) for c in range(1, 4)
+                         if isinstance(ws.cell(r, c).value, str))
+        if title and eng["client_name"] and norm_text(eng["client_name"]) not in norm_text(title) and \
+                not any(norm_text(eng["client_name"]) in norm_text(str(ws.cell(r, c).value or "")) for r in range(1, hr) for c in range(1, 10)):
+            warnings.append(f"Template header shows '{title[:80]}' - does not mention engagement client "
+                            f"'{eng['client_name']}'. The header is not changed automatically; correct it if needed.")
+        yr = str(eng["fy_end"])[:4]
+        if title and yr not in title and not any(yr in str(ws.cell(r, c).value or "") for r in range(1, hr) for c in range(1, 10)):
+            warnings.append(f"Template header does not mention the financial year end {eng['fy_end']}.")
+    dvs = [(str(d.sqref), d.formula1) for d in ws.data_validations.dataValidation]
+    return {"sheet": ws.title, "header_row": hr, "first_data_row": first, "totals_row": totals,
+            "capacity": (totals - first) if totals else None, "mapping": mp, "existing_rows": existing,
+            "row_formulas": formulas, "tolerance_cell": tol, "data_validations": dvs, "sheets": wb.sheetnames,
+            "rtl": bool(ws.sheet_view.rightToLeft), "warnings": warnings}
 
 
 # --------------------------------------------------------------------------- reference shifting
@@ -173,7 +250,8 @@ def insert_rows(wb, ws, at: int, n: int) -> None:
     if ws.print_area:
         pa = ws.print_area if isinstance(ws.print_area, str) else ",".join(ws.print_area)
         ws.print_area = ",".join(_shift_range_text(p.split("!")[-1].replace("$", ""), at, n, True) for p in pa.split(","))
-    # copy style from the last template data row into the new rows
+    # copy style and the template's row formulas (translated) from the last data row into the new rows
+    from openpyxl.formula.translate import Translator
     src = at - 1
     for r in range(at, at + n):
         ws.row_dimensions[r].height = ws.row_dimensions[src].height
@@ -181,6 +259,8 @@ def insert_rows(wb, ws, at: int, n: int) -> None:
             s, d = ws.cell(src, c), ws.cell(r, c)
             if s.has_style:
                 d._style = copy(s._style)
+            if isinstance(s.value, str) and s.value.startswith("="):
+                d.value = Translator(s.value, origin=s.coordinate).translate_formula(d.coordinate)
 
 
 # --------------------------------------------------------------------------------- population
@@ -232,7 +312,7 @@ def generate(eid: int, user: str, final: bool = False) -> dict:
     wb = load_workbook(out, keep_vba=src.suffix.lower() == ".xlsm")
     ws, hr, mp = locate(wb)
     col = lambda logical: mp.get(logical, logical)
-    first = hr + 1
+    first = first_data_row(ws, hr, mp)
     totals = _find_totals_row(ws, hr, mp)
     capacity = (totals - first) if totals else 10 ** 6
     inserted = 0
@@ -254,6 +334,11 @@ def generate(eid: int, user: str, final: bool = False) -> dict:
                 cleared += 1
 
     _fill_header_info(ws, hr, eng)
+    tol_cell = find_tolerance_cell(ws, hr)
+    if tol_cell and float(ws[tol_cell].value) != float(eng["tolerance"]):
+        db.log(user, eid, "workpaper", None, "set_tolerance_cell", tol_cell, ws[tol_cell].value, eng["tolerance"],
+               "Engagement tolerance written to template input cell used by its formulas")
+        ws[tol_cell].value = float(eng["tolerance"])
     E, I, J, D, K = (col(x) for x in "EIJDK")
     for idx, row in enumerate(rows):
         r = first + idx
@@ -280,11 +365,22 @@ def generate(eid: int, user: str, final: bool = False) -> dict:
         # Manual audit evidence: only values entered by an auditor are written
         for logical, key in (("L", "gdn_issued"), ("M", "gdn_date"), ("N", "price_list_matched"), ("O", "invoice_approved")):
             v = man.get(key)
-            if v:
-                dv = to_date(v) if key == "gdn_date" else None
+            if not v:
+                continue
+            addr = f"{col(logical)}{r}"
+            if key == "gdn_date":
+                dv = to_date(v)
                 _write(ws, col(logical), r, datetime(dv.year, dv.month, dv.day) if dv else v, "dd/mm/yyyy" if dv else None)
+            else:
+                _write(ws, col(logical), r, _validated_value(ws, addr, v))
         if man.get("explanation"):
-            _write(ws, col("P"), r, man["explanation"])
+            pc = ws[f"{col('P')}{r}"]
+            if isinstance(pc.value, str) and pc.value.startswith("="):
+                # the template computes P with a formula: keep it, record the auditor's explanation as a note
+                pc.comment = Comment(f"Auditor explanation ({man.get('explanation_by', '')}): {man['explanation']}",
+                                     "Auditor", width=300, height=110)
+            else:
+                _write(ws, col("P"), r, man["explanation"])
         # provenance comments for AI-extracted values not yet confirmed by the auditor
         for logical, fk in (("B", "buyer_name"), ("E", "taxable_amount"), ("G", "invoice_date"), ("H", "invoice_number"), ("F", "currency")):
             f = F.get(fk) or {}
@@ -295,7 +391,20 @@ def generate(eid: int, user: str, final: bool = False) -> dict:
                 c.comment = Comment(f"AI-extracted ({f.get('method')}), confidence {float(f.get('confidence') or 0):.0%}; "
                                     f"source: {row['file']} p.{f.get('page') or '?'}. Not yet auditor-confirmed.", "AI Audit Assistant",
                                     width=260, height=80)
-    _add_summary_sheets(wb, eid, eng, rows, final, user, tf["original_name"])
+    warnings = []
+    no_fx = [r["invoice_number"] or r["file"] for r in rows if r["currency"] and r["exchange_rate"] is None]
+    if no_fx:
+        warnings.append(f"{len(no_fx)} invoice(s) without an authorised exchange rate ({', '.join(map(str, no_fx[:8]))}); "
+                        "column I is blank - check how the template's column J formula treats a blank rate.")
+    no_amt = [r["invoice_number"] or r["file"] for r in rows if r["invoice_amount"] is None]
+    if no_amt:
+        warnings.append(f"{len(no_amt)} invoice(s) without an amount excluding VAT ({', '.join(map(str, no_amt[:8]))}).")
+    unconfirmed = sum(1 for r in rows if not r["auditor_confirmed"])
+    if unconfirmed:
+        warnings.append(f"{unconfirmed} row(s) contain AI-extracted values not yet confirmed by the auditor (cell comments).")
+    if not final:
+        warnings.append("DRAFT - the working paper has not been finalised.")
+    _add_summary_sheets(wb, eid, eng, rows, final, user, tf["original_name"], warnings)
     wb.save(out)
     # verify the file re-opens
     load_workbook(out).close()
@@ -307,8 +416,31 @@ def generate(eid: int, user: str, final: bool = False) -> dict:
                                                          db.jdump({"type": "workpaper", "final": final, "rows": len(rows),
                                                                    "inserted_rows": inserted, "cleared_cells": cleared})))
         db.log(user, eid, "file", cur.lastrowid, "export_workpaper", note=f"{tag}: {len(rows)} rows, {inserted} rows inserted", c=c)
-    return {"path": str(out), "name": out.name, "rows": len(rows), "inserted_rows": inserted, "sheet": ws.title,
+    return {"path": str(out), "name": out.name, "rows": len(rows), "inserted_rows": inserted, "warnings": warnings, "sheet": ws.title,
             "header_row": hr, "first_data_row": first, "totals_row": totals, "cleared_cells": cleared}
+
+
+def _allowed_values(ws, addr):
+    for dv in ws.data_validations.dataValidation:
+        if dv.type == "list" and dv.formula1 and addr in dv.sqref:
+            f = dv.formula1.strip()
+            if f.startswith('"'):
+                return [x.strip() for x in f.strip('"').split(",")]
+    return None
+
+
+def _validated_value(ws, addr, v):
+    """Translate Yes/No/N/A to the value list the template's data validation accepts (e.g. نعم / لا)."""
+    allowed = _allowed_values(ws, addr)
+    if not allowed:
+        return v
+    if v in allowed:
+        return v
+    for cand in YES_NO_AR.get(v, []):
+        for a in allowed:
+            if norm_text(a) == norm_text(cand):
+                return a
+    return v
 
 
 def _unique_title(wb, base):
@@ -318,7 +450,7 @@ def _unique_title(wb, base):
     return t
 
 
-def _add_summary_sheets(wb, eid, eng, rows, final, user, template_name):
+def _add_summary_sheets(wb, eid, eng, rows, final, user, template_name, warnings=()):
     from openpyxl.styles import Font, PatternFill
     s = engine.summary(eid)
     ws = wb.create_sheet(_unique_title(wb, "AI Audit Summary"))
@@ -340,6 +472,11 @@ def _add_summary_sheets(wb, eid, eng, rows, final, user, template_name):
         ws.cell(i, 1, k).font = bold
         ws.cell(i, 2, v)
     r = len(lines) + 5
+    ws.cell(r, 1, "Export warnings").font = bold
+    for w_ in warnings or ["None"]:
+        r += 1
+        ws.cell(r, 2, w_)
+    r += 2
     ws.cell(r, 1, "Outstanding audit procedures").font = bold
     for o in s["outstanding_procedures"]:
         r += 1
