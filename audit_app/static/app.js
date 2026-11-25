@@ -38,8 +38,9 @@ async function blobOf(method, path) {
   const r = await fetch(path, { method, headers: { Authorization: "Bearer " + S.token } });
   if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail; } catch (e) { /* ignore */ } throw new Error(m); }
   const cd = r.headers.get("content-disposition") || "";
-  const m = /filename="?([^";]+)"?/.exec(cd);
-  return { blob: await r.blob(), name: m ? m[1] : "download", headers: r.headers };
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(cd), m = /filename="?([^";]+)"?/.exec(cd);
+  const name = star ? decodeURIComponent(star[1]) : m ? m[1] : "download";
+  return { blob: await r.blob(), name, headers: r.headers };
 }
 async function download(method, path) {
   try {

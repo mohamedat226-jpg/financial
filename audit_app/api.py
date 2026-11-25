@@ -715,8 +715,15 @@ def exclude_invoice(iid: int, reason: str, user=Depends(require("configure"))):
 
 
 # ---------------------------------------------------------------------------------------- exports
+def _content_disposition(name: str) -> str:
+    """RFC 6266 / 5987: ASCII fallback plus UTF-8 filename* so Arabic names survive the download."""
+    from urllib.parse import quote
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or "download"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+
+
 def _download(data: bytes, name: str, media: str):
-    return Response(data, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    return Response(data, media_type=media, headers={"Content-Disposition": _content_disposition(name)})
 
 
 @app.post("/api/engagements/{eid}/export/workpaper")
@@ -736,7 +743,7 @@ def export_workpaper(eid: int, user=Depends(require("edit"))):
 @app.get("/api/engagements/{eid}/export/{kind}")
 def export(eid: int, kind: str, user=Depends(current_user)):
     e = _eng(eid)
-    base = re.sub(r"[^A-Za-z0-9_-]+", "_", e["client_name"])[:40] + f"_FY{e['financial_year']}"
+    base = workpaper.safe_filename(e["client_name"]) + f"_FY{e['financial_year']}"
     if kind == "findings.pdf":
         return _download(reports.findings_pdf(eid, user["username"]), f"{base}_Audit_Findings.pdf", "application/pdf")
     if kind == "extraction.csv":
