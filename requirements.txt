@@ -1,0 +1,17 @@
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+pdfplumber>=0.11
+pypdfium2>=4.0
+openpyxl>=3.1
+pandas>=2.0
+reportlab>=4.0
+arabic-reshaper>=3.0
+python-bidi>=0.4
+anthropic>=2.0
+pydantic>=2.0
+# optional: local OCR for scanned PDFs (also requires the tesseract binary with ara+eng language data)
+# pytesseract>=0.3
+# tests
+pytest>=8.0
+httpx>=0.27
