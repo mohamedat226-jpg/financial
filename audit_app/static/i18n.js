@@ -217,5 +217,6 @@ window.NOTE_AR = [
   [/^VAT derived as gross - taxable$/, "الضريبة محسوبة = الإجمالي − الخاضع للضريبة"],
   [/^Taxable back-calculated from gross at (\S+)% - must be verified$/, "الخاضع للضريبة محسوب عكسيًا من الإجمالي بنسبة $1% - يجب التحقق منه"],
   [/^Rule engine read '(.*)', AI read '(.*)' - auditor to resolve$/, "قرأ محرك القواعد «$1» وقرأ الذكاء الاصطناعي «$2» - يحسم المراجع الخلاف"],
+  [/^Read by OCR \(Tesseract\) from a scanned image - agree key values to the image$/, "قُرئت بتقنية OCR (Tesseract) من صورة ممسوحة - طابق القيم الأساسية مع الصورة"],
   [/^AI: (.*)$/, "الذكاء الاصطناعي: $1"],
 ];

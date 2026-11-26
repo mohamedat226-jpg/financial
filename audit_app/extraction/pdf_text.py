@@ -9,7 +9,11 @@ from dataclasses import dataclass, field
 
 import pdfplumber
 
-from .normalize import has_arabic, norm_text, reverse_rtl
+import re
+
+from .normalize import _rev_word, has_arabic, norm_text, reverse_rtl
+
+_BIDI_MARKS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
 
 @dataclass
@@ -20,6 +24,7 @@ class Word:
     top: float
     bottom: float
     page: int
+    conf: float = 1.0   # OCR word confidence (0-1); 1.0 for the PDF text layer
 
 
 @dataclass
@@ -95,7 +100,8 @@ def read_pdf(path: str) -> DocText:
 
 
 def tesseract_available() -> bool:
-    if not shutil.which("tesseract"):
+    from .. import config
+    if config.OCR_MODE == "off" or not shutil.which("tesseract"):
         return False
     try:
         import pytesseract  # noqa: F401
@@ -128,9 +134,14 @@ def _ocr(path: str) -> DocText | None:
         data = pytesseract.image_to_data(img, lang="ara+eng", output_type=pytesseract.Output.DICT)
         words = []
         for j, txt in enumerate(data["text"]):
-            if txt.strip() and float(data["conf"][j]) > 0:
+            txt = _BIDI_MARKS.sub("", txt or "").strip()
+            if txt and float(data["conf"][j]) > 0:
                 x, y, w, h = (data[k][j] / scale for k in ("left", "top", "width", "height"))
-                words.append(Word(txt, x, x + w, y, y + h, i + 1))
+                # Tesseract returns Arabic words in reading order; the PDF text layer (which the rule engine reads)
+                # stores them in visual order. Convert so both sources look the same to the rule engine.
+                if has_arabic(txt):
+                    txt = _rev_word(txt)
+                words.append(Word(txt, x, x + w, y, y + h, i + 1, conf=round(float(data["conf"][j]) / 100, 3)))
         doc.lines.extend(_group_lines(words, pw, ph, tol=6))
     return doc
 
