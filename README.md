@@ -6,6 +6,11 @@ audit checks, and populates the auditor's own Excel working paper **without chan
 formulas or formatting**. Every value is traceable to its PDF page and location, and AI-extracted data is
 kept distinct from auditor-confirmed data.
 
+## Documentation
+
+* [Arabic user guide for the audit team](docs/USER_GUIDE_AR.md) (دليل الاستخدام بالعربية)
+* [Phase 6 completion report](docs/PHASE_6_COMPLETION_REPORT.md) (final verification and project sign-off)
+
 ## Quick start
 
 ```bash
