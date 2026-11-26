@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   ai_fields TEXT,
   line_items TEXT,
   extraction_notes TEXT,
+  zatca_qr TEXT,
   fx_override REAL,
   manual TEXT,
   match TEXT,
@@ -180,6 +181,10 @@ def conn() -> sqlite3.Connection:
 def init() -> None:
     c = _connect()
     c.executescript(SCHEMA)
+    # additive migrations for databases created by earlier versions (never drops or rewrites data)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(invoices)")}
+    if "zatca_qr" not in cols:
+        c.execute("ALTER TABLE invoices ADD COLUMN zatca_qr TEXT")
     c.commit()
     c.close()
 

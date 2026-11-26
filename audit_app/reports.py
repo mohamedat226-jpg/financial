@@ -110,7 +110,8 @@ def findings_pdf(eid: int, user: str) -> bytes:
 
 CSV_COLS = ["sno", "file", "invoice_number", "invoice_date", "customer", "product_type", "currency", "invoice_amount",
             "vat_amount", "gross_amount", "vat_rate", "exchange_rate", "amount_sar", "ledger_amount", "difference",
-            "match_status", "diff_status", "review_status", "reviewer", "confidence", "method", "doc_type"]
+            "match_status", "match_pass", "recon_category", "diff_status", "review_status", "reviewer", "confidence", "method",
+            "doc_type", "qr_status"]
 
 
 def extraction_csv(eid: int) -> bytes:

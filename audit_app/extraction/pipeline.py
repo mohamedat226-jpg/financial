@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from .. import config
-from . import llm, rules
+from . import llm, rules, zatca_qr
 from .normalize import norm_text, parse_amount, to_date
 from .pdf_text import DocText, read_pdf
 
@@ -138,9 +138,24 @@ def run(pdf_path: str) -> dict:
     for k in FIELDS:
         fields.setdefault(k, _empty())
 
+    qr = None
+    try:
+        qr = zatca_qr.find_in_pdf(pdf_path)
+    except Exception as e:  # noqa: BLE001 - QR evidence is supplementary; never fail extraction on it
+        notes.append(f"ZATCA QR detection failed: {type(e).__name__}: {e}")
+    if qr is None:
+        notes.append("ZATCA QR not checked (QR detector not installed)")
+    elif qr.get("payload") is None:
+        notes.append("No QR code detected on the invoice")
+    else:
+        d = qr["decoded"]
+        notes.append(f"ZATCA QR found on page {qr['page']} (phase {d['phase']}, "
+                     f"{'valid' if d['tlv_valid'] else 'INVALID'} TLV)")
+
     conf = overall_confidence(fields)
     has_core = any(fields[k]["value"] is not None for k in ("invoice_number", "taxable_amount", "gross_amount"))
     status = "extracted" if has_core else "needs_manual"
     return {"fields": fields, "doc_type": (rule_res or {}).get("doc_type"), "language": (rule_res or {}).get("language"),
             "line_items": (rule_res or {}).get("line_items", []), "notes": notes, "method": method,
-            "has_text_layer": doc.has_text_layer, "page_count": doc.pages, "status": status, "confidence": conf}
+            "has_text_layer": doc.has_text_layer, "page_count": doc.pages, "status": status, "confidence": conf,
+            "zatca_qr": qr}
