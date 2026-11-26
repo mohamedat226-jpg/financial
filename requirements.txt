@@ -12,6 +12,8 @@ anthropic>=2.0
 pydantic>=2.0
 # ZATCA QR code detection on invoice pages (without it QR checks are skipped and reported as not checked)
 opencv-python-headless>=4.8
+# Hijri (Umm al-Qura) to Gregorian date conversion
+hijridate>=2.3
 # optional: local OCR for scanned PDFs (also requires the tesseract binary with ara+eng language data)
 # pytesseract>=0.3
 # tests

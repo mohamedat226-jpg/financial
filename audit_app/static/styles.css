@@ -161,3 +161,5 @@ td.missing { background: var(--crit-soft); }
 .module.available { opacity: 1; border-color: var(--accent); }
 .qrgrid { display: grid; grid-template-columns: max-content 1fr max-content max-content; gap: 4px 10px; align-items: center; }
 @media (max-width: 640px) { .qrgrid { grid-template-columns: 1fr 1fr; } }
+.dash-export { gap: 6px; flex-wrap: wrap; align-items: center; }
+@media (max-width: 680px) { .dash-export { width: 100%; } }

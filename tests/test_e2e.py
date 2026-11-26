@@ -123,3 +123,19 @@ def test_outputs_generated(processed):
     csv_ = c.get(f"/api/engagements/{eid}/export/extraction.csv").content.decode("utf-8-sig")
     header = csv_.splitlines()[0].split(",")
     assert {"recon_category", "match_pass", "qr_status"} <= set(header)
+
+
+def test_row_risk_matches_open_findings(processed):
+    """The dashboard's risk filter/chart uses `risk` on each row: the highest risk among its open findings."""
+    c, eid, _ = processed
+    rows = _rows(c, eid)["rows"]
+    order = {"High": 0, "Medium": 1, "Low": 2}
+    by_inv = {}
+    for f in c.get(f"/api/engagements/{eid}/findings").json():
+        if f.get("invoice_id") and f["review_status"] != "cleared":
+            by_inv.setdefault(f["invoice_id"], []).append(f["risk"])
+    for r in rows:
+        risks = by_inv.get(r["invoice_id"], [])
+        assert r["open_findings"] == len(risks)
+        assert r["risk"] == (min(risks, key=order.get) if risks else None)
+    assert any(r["risk"] == "High" for r in rows) and any(r["risk"] is None for r in rows)

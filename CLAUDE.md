@@ -17,10 +17,12 @@ FastAPI backend + single-page UI (vanilla JS, EN/AR with RTL) in `audit_app/`. T
    row has none, the app writes `=IF(OR(E="",I=""),"",E*I)` and `=IF(OR(D="",J=""),"",D-J)` (guarded so blank
    rows never show `#VALUE!`). An auditor explanation for a formula cell in P goes into a cell comment.
 6. **Manual columns.** L–O are written only from auditor-entered values; P only from an auditor-saved explanation.
-7. **Low confidence.** Fields below `AUDIT_LOW_CONFIDENCE` (default 0.85) raise `LOW_CONFIDENCE` until confirmed.
-8. **PDFium is not thread-safe.** Wrap every `pypdfium2` call in `extraction.pdf_text.PDFIUM_LOCK`.
-9. **Bilingual UI.** Every new string needs both `en` and `ar` entries in `static/i18n.js`.
-10. **Report after each phase:** commands run with exit codes, files changed, errors and fixes, and acceptance
+7. **Hijri dates** are converted (Umm al-Qura) but capped at confidence 0.6 and flagged `HIJRI_DATE` until confirmed.
+8. **Reports state facts only.** The executive report never writes an audit conclusion; AI explanations are labelled unconfirmed.
+9. **Low confidence.** Fields below `AUDIT_LOW_CONFIDENCE` (default 0.85) raise `LOW_CONFIDENCE` until confirmed.
+10. **PDFium is not thread-safe.** Wrap every `pypdfium2` call in `extraction.pdf_text.PDFIUM_LOCK`.
+11. **Bilingual UI.** Every new string needs both `en` and `ar` entries in `static/i18n.js`.
+12. **Report after each phase:** commands run with exit codes, files changed, errors and fixes, and acceptance
     criteria with evidence (pass/fail).
 
 ## Commands

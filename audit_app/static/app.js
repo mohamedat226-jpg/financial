@@ -275,7 +275,7 @@ function filtered() {
   return S.rows.filter((r) => (!f.from || (r.invoice_date && r.invoice_date >= f.from)) && (!f.to || (r.invoice_date && r.invoice_date <= f.to))
     && (!f.customer || r.customer === f.customer) && (!f.invno || (r.invoice_number || "").toLowerCase().includes(f.invno.toLowerCase()))
     && (!f.currency || r.currency === f.currency) && (!f.match || r.match_status === f.match) && (!f.diff || r.diff_status === f.diff)
-    && (!f.recon || r.recon_category === f.recon)
+    && (!f.recon || r.recon_category === f.recon) && (!f.risk || (f.risk === "None" ? !r.risk : r.risk === f.risk))
     && (!f.review || r.review_status === f.review));
 }
 function viewDashboard(v) {
@@ -291,30 +291,53 @@ function viewDashboard(v) {
     ${sel("match", t("match"), ["Matched", "Not Found in Ledger", "Possible Match", "Duplicate Invoice", "Amount Mismatch", "Customer Mismatch", "Ledger Not Uploaded"])}
     ${sel("diff", t("diffStatus"), ["No Difference", "Difference Identified", "Missing Ledger Amount", "Missing Invoice Data"])}
     ${sel("recon", t("recon"), RECON)}
+    <label class="f">${t("riskF")}<select data-f="risk"><option value="">${t("all")}</option>${["High", "Medium", "Low", "None"].map((o) => `<option value="${o}" ${S.filters.risk === o ? "selected" : ""}>${o === "None" ? t("noRisk") : esc(o)}</option>`).join("")}</select></label>
     ${sel("review", t("reviewStatus"), ["pending", "approved", "investigate", "rejected"])}
-    <button id="fr">${t("reset")}</button></div>
+    <button id="fr">${t("reset")}</button>
+    <span class="spacer"></span>
+    <div class="row dash-export"><span class="small muted">${t("dashExport")}:</span>
+      <button class="sm" id="dxWp">⬇ ${t("exportWp")}</button><button class="sm" data-dx="executive.pdf">⬇ ${t("exportExec")}</button>
+      <button class="sm" id="dxView">⬇ ${t("exportView")}</button></div></div>
     <div class="kpis" id="kpis"></div>
+    <div class="small muted" style="margin:6px 2px">${t("drillHint")}</div>
     <div class="grid g3" id="charts"></div>
-    <div class="card" style="margin-top:14px"><h3>Data table (reconciles to KPIs and charts)</h3><div class="table-wrap" style="max-height:340px"><table class="t" id="dt"></table></div></div>`;
+    <div class="card" style="margin-top:14px"><h3>${t("dataTable")}</h3><div class="table-wrap" style="max-height:340px"><table class="t" id="dt"></table></div></div>`;
   $$("[data-f]").forEach((el) => el.addEventListener(el.tagName === "INPUT" && el.type !== "date" ? "input" : "change", () => { S.filters[el.dataset.f] = el.value || undefined; drawDash(); }));
   $("#fr").addEventListener("click", () => { S.filters = {}; viewDashboard(v); });
+  $("#dxWp").addEventListener("click", () => download("POST", `/api/engagements/${S.eid}/export/workpaper`));
+  $$("button[data-dx]").forEach((b) => b.addEventListener("click", () => download("GET", `/api/engagements/${S.eid}/export/${b.dataset.dx}`)));
+  $("#dxView").addEventListener("click", exportView);
   drawDash();
+}
+/* Exports exactly the rows behind the current filters. */
+function exportView() {
+  const cols = [["sno", "#"], ["invoice_number", t("invNo")], ["invoice_date", t("invDate")], ["customer", t("customer")], ["currency", t("currency")],
+    ["invoice_amount", t("amountExVat")], ["exchange_rate", t("fx")], ["amount_sar", t("amtSar")], ["ledger_amount", t("ledgerAmt")], ["difference", t("diff")],
+    ["match_status", t("match")], ["match_pass", t("matchPass")], ["recon_category", t("recon")], ["diff_status", t("diffStatus")], ["risk", t("riskF")],
+    ["open_findings", t("openF")], ["qr_status", t("qrTitle")], ["review_status", t("reviewStatus")], ["file", t("file")]];
+  const q = (v) => { const x = v === null || v === undefined ? "" : String(v); return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
+  const R = filtered();
+  const lines = [cols.map((c) => q(c[1])).join(",")].concat(R.map((r) => cols.map((c) => q(r[c[0]])).join(",")));
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `dashboard_view_FY${S.eng.financial_year}_${R.length}_rows.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 function drawDash() {
   destroyCharts();
   const R = filtered();
   const sum = (a) => a.reduce((s, x) => s + (x || 0), 0);
   const k = [
-    ["kTotal", R.length, ""], ["kExtracted", R.filter((r) => r.status === "extracted").length, `${R.filter((r) => r.status === "needs_manual").length} need manual entry`],
+    ["kTotal", R.length, ""], ["kExtracted", R.filter((r) => r.status === "extracted").length, `${R.filter((r) => r.status === "needs_manual").length} ${t("sNeedManual")}`],
     ["kPending", R.filter((r) => r.review_status === "pending").length, ""], ["kMatched", R.filter((r) => r.match_status === "Matched").length, ""],
-    ["kUnmatched", R.filter((r) => ["Not Found in Ledger", "Possible Match"].includes(r.match_status)).length, "Not found + possible match"],
-    ["kDup", R.filter((r) => r.match_status === "Duplicate Invoice").length, ""], ["kDiff", R.filter((r) => r.diff_status === "Difference Identified").length, `Tolerance SAR ${fmt(S.eng.tolerance)}`],
-    ["kInvTotal", fmt(sum(R.map((r) => r.amount_sar))), `${R.filter((r) => r.amount_sar === null).length} without SAR amount`],
-    ["kLedger", fmt(sum(R.map((r) => r.ledger_amount))), "Linked ledger rows only"], ["kNetDiff", fmt(sum(R.map((r) => r.difference))), "Ledger − invoice (SAR)"],
-    ["kLedgerNoInv", ((S.summary || {}).recon_categories || {}).UNMATCHED_LEDGER_ROW ?? 0, "UNMATCHED_LEDGER_ROW · whole ledger (not filtered)"],
+    ["kUnmatched", R.filter((r) => ["Not Found in Ledger", "Possible Match"].includes(r.match_status)).length, t("sUnmatched")],
+    ["kDup", R.filter((r) => r.match_status === "Duplicate Invoice").length, ""], ["kDiff", R.filter((r) => r.diff_status === "Difference Identified").length, `${t("sTolerance")} ${fmt(S.eng.tolerance)}`],
+    ["kInvTotal", fmt(sum(R.map((r) => r.amount_sar))), `${R.filter((r) => r.amount_sar === null).length} ${t("sNoSar")}`],
+    ["kLedger", fmt(sum(R.map((r) => r.ledger_amount))), t("sLinked")], ["kNetDiff", fmt(sum(R.map((r) => r.difference))), t("sNetDiff")],
+    ["kLedgerNoInv", ((S.summary || {}).recon_categories || {}).UNMATCHED_LEDGER_ROW ?? 0, t("sWholeLedger")],
   ];
   $("#kpis").innerHTML = k.map(([l, val, s]) => `<div class="kpi"><div class="k">${t(l)}</div><div class="v">${esc(val)}</div><div class="s">${esc(s)}</div></div>`).join("");
-  const ids = ["cCountMonth", "cAmtMonth", "cAmtCust", "cMatch", "cDiff", "cCur", "cConf"];
+  const ids = ["cRecon", "cRisk", "cQr", "cCountMonth", "cAmtMonth", "cAmtCust", "cMatch", "cDiff", "cCur", "cConf"];
   $("#charts").innerHTML = ids.map((id) => `<div class="card chart-card" ${id === "cAmtCust" || id === "cDiff" ? 'style="grid-column: span 1"' : ""}><h3>${t(id)}</h3><div class="chart-box"><canvas id="${id}" role="img" aria-label="${esc(t(id))}"></canvas></div></div>`).join("");
   if (!window.Chart) return;
   const [c1, c2, c3, c4] = SERIES();
@@ -324,6 +347,10 @@ function drawDash() {
     scales: { x: { grid: { display: false } }, y: { beginAtZero: true, grid: { color: css("--grid") } } }, ...extra });
   const bar = { borderRadius: 4, borderSkipped: "start", maxBarThickness: 34 };
   const mk = (id, cfg) => S.charts.push(new Chart($("#" + id), cfg));
+  // drill-down: clicking a bar applies that value as a dashboard filter
+  // re-render after Chart.js has finished handling the click (re-rendering destroys the chart that owns the event)
+  const drill = (key, values) => ({ onClick: (_e, els) => { if (!els.length) return; S.filters[key] = values[els[0].index]; setTimeout(() => viewDashboard($("#view")), 0); },
+    onHover: (e, els) => { e.native.target.style.cursor = els.length ? "pointer" : "default"; } });
   mk("cCountMonth", { type: "bar", data: { labels: months, datasets: [{ label: "Invoices", data: months.map((m) => R.filter((r) => r.month === m).length), backgroundColor: c1, ...bar }] }, options: base() });
   mk("cAmtMonth", { type: "bar", data: { labels: months, datasets: [{ label: "SAR", data: months.map((m) => sum(R.filter((r) => r.month === m).map((r) => r.amount_sar))), backgroundColor: c1, ...bar }] },
     options: base({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => "SAR " + fmt(c.raw) } } } }) });
@@ -334,18 +361,30 @@ function drawDash() {
   const mStat = ["Matched", "Amount Mismatch", "Customer Mismatch", "Possible Match", "Duplicate Invoice", "Not Found in Ledger", "Ledger Not Uploaded"];
   const statusCol = { "Matched": css("--good"), "Amount Mismatch": css("--crit"), "Customer Mismatch": css("--warn"), "Possible Match": css("--serious"), "Duplicate Invoice": css("--s7"), "Not Found in Ledger": css("--s8"), "Ledger Not Uploaded": css("--text-3") };
   const present = mStat.filter((s) => R.some((r) => r.match_status === s));
-  mk("cMatch", { type: "bar", data: { labels: present, datasets: [{ label: "Invoices", data: present.map((s) => R.filter((r) => r.match_status === s).length), backgroundColor: present.map((s) => statusCol[s]), ...bar }] }, options: base() });
+  mk("cMatch", { type: "bar", data: { labels: present, datasets: [{ label: "Invoices", data: present.map((s) => R.filter((r) => r.match_status === s).length), backgroundColor: present.map((s) => statusCol[s]), ...bar }] }, options: base(drill("match", present)) });
   const dif = R.filter((r) => r.difference !== null && r.diff_status === "Difference Identified").sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference)).slice(0, 12);
   mk("cDiff", { type: "bar", data: { labels: dif.map((r) => r.invoice_number || r.file), datasets: [{ label: "Difference SAR", data: dif.map((r) => r.difference), backgroundColor: dif.map((r) => (r.difference > 0 ? c2 : c1)), ...bar, borderSkipped: false }] },
     options: base({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `SAR ${fmt(c.raw)} (${c.raw > 0 ? "ledger higher" : "ledger lower"})` } } }, scales: { x: { grid: { display: false }, ticks: { maxRotation: 60, autoSkip: false, font: { size: 10 } } }, y: { grid: { color: css("--grid") } } } }) });
   const curs = [...new Set(R.map((r) => r.currency || "Not identified"))];
   mk("cCur", { type: "doughnut", data: { labels: curs, datasets: [{ data: curs.map((c) => R.filter((r) => (r.currency || "Not identified") === c).length), backgroundColor: SERIES().slice(0, curs.length), borderColor: css("--surface"), borderWidth: 2 }] },
     options: { responsive: true, maintainAspectRatio: false, animation: false, cutout: "62%", plugins: { legend: { position: "bottom" } } } });
+  const reconCol = { MATCHED_CLEAN: css("--good"), WITHIN_TOLERANCE: css("--s3"), MATERIAL_DIFFERENCE: css("--crit"), NOT_IN_LEDGER: css("--s8"),
+    POSSIBLE_MATCH: css("--serious"), DUPLICATE_INVOICE: css("--s7"), INCOMPLETE_DATA: css("--warn"), LEDGER_NOT_UPLOADED: css("--text-3") };
+  const rc = RECON.filter((k) => R.some((r) => r.recon_category === k));
+  mk("cRecon", { type: "bar", data: { labels: rc, datasets: [{ label: "Invoices", data: rc.map((k) => R.filter((r) => r.recon_category === k).length), backgroundColor: rc.map((k) => reconCol[k]), ...bar }] },
+    options: base({ indexAxis: "y", ...drill("recon", rc), scales: { x: { beginAtZero: true, grid: { color: css("--grid") } }, y: { grid: { display: false }, ticks: { font: { size: 10 } } } } }) });
+  const rk = ["High", "Medium", "Low", "None"];
+  mk("cRisk", { type: "bar", data: { labels: rk.map((x) => (x === "None" ? t("noRisk") : x)), datasets: [{ label: "Invoices", data: rk.map((x) => R.filter((r) => (r.risk || "None") === x).length), backgroundColor: [css("--crit"), css("--warn"), css("--text-3"), css("--good")], ...bar }] },
+    options: base(drill("risk", rk)) });
+  const qk = [["valid_phase1", "qrValid1", css("--good")], ["valid_phase2", "qrValid2", css("--s3")], ["invalid", "qrInvalid", css("--crit")], ["not_found", "qrNotFound", css("--warn")], ["not_checked", "qrNotChecked", css("--text-3")]]
+    .filter(([k]) => R.some((r) => r.qr_status === k));
+  mk("cQr", { type: "doughnut", data: { labels: qk.map((x) => t(x[1])), datasets: [{ data: qk.map(([k]) => R.filter((r) => r.qr_status === k).length), backgroundColor: qk.map((x) => x[2]), borderColor: css("--surface"), borderWidth: 2 }] },
+    options: { responsive: true, maintainAspectRatio: false, animation: false, cutout: "62%", plugins: { legend: { position: "bottom" } } } });
   const bins = ["<50%", "50–75%", "75–90%", "≥90%", "Not extracted"];
   const binOf = (c) => (c === null || c === 0 ? 4 : c < 0.5 ? 0 : c < lowConf() ? 1 : c < 0.9 ? 2 : 3);
   mk("cConf", { type: "bar", data: { labels: bins, datasets: [{ label: "Invoices", data: bins.map((_, i) => R.filter((r) => binOf(r.confidence) === i).length), backgroundColor: [css("--crit"), css("--warn"), c1, css("--good"), css("--text-3")], ...bar }] }, options: base() });
-  $("#dt").innerHTML = `<thead><tr><th>#</th><th>${t("invNo")}</th><th>${t("invDate")}</th><th>${t("customer")}</th><th>${t("currency")}</th><th class="num">${t("amtSar")}</th><th class="num">${t("ledgerAmt")}</th><th class="num">${t("diff")}</th><th>${t("match")}</th><th>${t("recon")}</th><th>${t("diffStatus")}</th><th>${t("reviewStatus")}</th></tr></thead><tbody>${R.map((r) => `<tr class="click" data-id="${r.invoice_id}"><td>${r.sno}</td><td>${esc(r.invoice_number)}</td><td>${esc(r.invoice_date)}</td><td dir="auto">${esc(r.customer)}</td><td>${esc(r.currency)}</td><td class="num">${fmt(r.amount_sar)}</td><td class="num">${fmt(r.ledger_amount)}</td><td class="num">${fmt(r.difference)}</td><td>${statusBadge(r.match_status)}${r.match_pass ? ` <span class="small muted">P${r.match_pass}</span>` : ""}</td><td>${statusBadge(r.recon_category)}</td><td>${statusBadge(r.diff_status)}</td><td>${statusBadge(r.review_status)}</td></tr>`).join("")}
-    <tr><td></td><td colspan="4"><b>Total (${R.length})</b></td><td class="num"><b>${fmt(sum(R.map((r) => r.amount_sar)))}</b></td><td class="num"><b>${fmt(sum(R.map((r) => r.ledger_amount)))}</b></td><td class="num"><b>${fmt(sum(R.map((r) => r.difference)))}</b></td><td colspan="3"></td></tr></tbody>`;
+  $("#dt").innerHTML = `<thead><tr><th>#</th><th>${t("invNo")}</th><th>${t("invDate")}</th><th>${t("customer")}</th><th>${t("currency")}</th><th class="num">${t("amtSar")}</th><th class="num">${t("ledgerAmt")}</th><th class="num">${t("diff")}</th><th>${t("match")}</th><th>${t("recon")}</th><th>${t("riskF")}</th><th>${t("diffStatus")}</th><th>${t("reviewStatus")}</th></tr></thead><tbody>${R.map((r) => `<tr class="click" data-id="${r.invoice_id}"><td>${r.sno}</td><td>${esc(r.invoice_number)}</td><td>${esc(r.invoice_date)}</td><td dir="auto">${esc(r.customer)}</td><td>${esc(r.currency)}</td><td class="num">${fmt(r.amount_sar)}</td><td class="num">${fmt(r.ledger_amount)}</td><td class="num">${fmt(r.difference)}</td><td>${statusBadge(r.match_status)}${r.match_pass ? ` <span class="small muted">P${r.match_pass}</span>` : ""}</td><td>${statusBadge(r.recon_category)}</td><td>${r.risk ? statusBadge(r.risk) + ` <span class="small muted">×${r.open_findings}</span>` : ""}</td><td>${statusBadge(r.diff_status)}</td><td>${statusBadge(r.review_status)}</td></tr>`).join("")}
+    <tr><td></td><td colspan="4"><b>${t("total")} (${R.length})</b></td><td class="num"><b>${fmt(sum(R.map((r) => r.amount_sar)))}</b></td><td class="num"><b>${fmt(sum(R.map((r) => r.ledger_amount)))}</b></td><td class="num"><b>${fmt(sum(R.map((r) => r.difference)))}</b></td><td colspan="5"></td></tr></tbody>`;
   $$("#dt tr[data-id]").forEach((tr) => tr.addEventListener("click", () => (location.hash = `e/${S.eid}/review/${tr.dataset.id}`)));
 }
 
@@ -519,7 +558,8 @@ function viewExports(v) {
   const s = S.summary, e = S.eng;
   v.innerHTML = `<div class="grid g2"><div class="card"><h3>${t("exports")}</h3><div class="grid">
     <button class="primary" id="xWp">⬇ ${t("exportWp")}</button><button data-x="findings.pdf">⬇ ${t("exportPdf")}</button>
-    <button data-x="extraction.csv">⬇ ${t("exportCsv")}</button><button data-x="exceptions.xlsx">⬇ ${t("exportExc")}</button><button data-x="log.xlsx">⬇ ${t("exportLog")}</button></div>
+    <button data-x="extraction.csv">⬇ ${t("exportCsv")}</button><button data-x="exceptions.xlsx">⬇ ${t("exportExc")}</button><button data-x="log.xlsx">⬇ ${t("exportLog")}</button>
+    <button data-x="executive.pdf">⬇ ${t("exportExec")}</button><button data-x="extraction.json">⬇ ${t("exportJson")}</button></div>
     <p class="small muted">The working paper is written to a copy of the uploaded template; the original is never modified. Until finalised it is marked DRAFT.</p>
     <h4>${t("finalize")}</h4>${e.status === "finalized" ? `<div class="notice">✓ ${t("finalized")} – ${esc(e.finalized_by)} · ${esc(e.finalized_at)}</div>${S.user.permissions.finalize ? `<button class="sm" id="reopen" style="margin-top:8px">Re-open…</button>` : ""}`
       : `<p class="small">Requires every invoice approved or rejected, no open high-risk findings, and manager/partner role.</p><button class="good" id="fin" ${S.user.permissions.finalize ? "" : "disabled"}>${t("finalize")}</button>`}
