@@ -84,7 +84,9 @@ under your engagement terms and client confidentiality obligations before enabli
 8. **Review** – page image with highlighted source locations, edit / confirm fields (reason required and logged),
    ledger record and match evidence, manual evidence (columns L–O), AI-suggested explanation for P (written only
    after the auditor saves it), approve / investigate / reject, comments, change history.
-9. **Dashboard** – 11 KPIs, 7 charts and 9 filters (incl. reconciliation category), all computed from the same rows as the working paper.
+9. **Dashboard** – 11 KPIs, 10 charts and 10 filters (incl. reconciliation category and risk). Clicking a bar in the
+   reconciliation, risk or matching chart filters the whole dashboard; export buttons give the working paper, the
+   executive report and a CSV of exactly the rows in the current view, all computed from the same rows as the working paper.
 10. **Export** – completed working paper (copy of the template), PDF findings report, bilingual (Arabic / English)
    executive summary PDF (scope, reconciliation, findings by risk, differences, ZATCA QR results, outstanding
    procedures; the audit conclusion is left blank for the engagement team), extraction data as JSON in the

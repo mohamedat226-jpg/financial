@@ -352,6 +352,23 @@ def _qr_status(inv) -> str:
     return f"valid_phase{d.get('phase')}" if d.get("tlv_valid") else "invalid"
 
 
+RISK_ORDER = {"High": 0, "Medium": 1, "Low": 2}
+
+
+def attach_risk(eid: int, rows: list[dict]) -> list[dict]:
+    """Adds `risk` (highest risk among the invoice's open findings, or None) and `open_findings` to each row,
+    so the dashboard can filter and chart by risk from the same rows that feed the KPIs."""
+    by_inv: dict[int, list[str]] = {}
+    for f in db.q("SELECT invoice_id, risk FROM findings WHERE engagement_id=? AND active=1 AND review_status != 'cleared' "
+                  "AND invoice_id IS NOT NULL", (eid,)):
+        by_inv.setdefault(f["invoice_id"], []).append(f["risk"])
+    for r in rows:
+        risks = by_inv.get(r["invoice_id"], [])
+        r["open_findings"] = len(risks)
+        r["risk"] = min(risks, key=lambda x: RISK_ORDER.get(x, 9)) if risks else None
+    return rows
+
+
 def unmatched_ledger_rows(eid: int, invs: list[dict] | None = None, ledger: list[dict] | None = None) -> list[dict]:
     """Ledger entries not linked to, nor proposed for, any invoice (fictitious revenue / occurrence risk)."""
     invs = invs if invs is not None else [i for i in load_invoices(eid) if i["status"] != "superseded"]

@@ -381,7 +381,7 @@ def progress(eid: int, user=Depends(current_user)):
 @app.get("/api/engagements/{eid}/rows")
 def rows(eid: int, user=Depends(current_user)):
     _eng(eid)
-    return {"rows": engine.compute_rows(eid), "summary": engine.summary(eid), "progress": _progress(eid)}
+    return {"rows": engine.attach_risk(eid, engine.compute_rows(eid)), "summary": engine.summary(eid), "progress": _progress(eid)}
 
 
 @app.get("/api/engagements/{eid}/findings")
