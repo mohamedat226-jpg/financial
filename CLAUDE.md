@@ -31,3 +31,5 @@ FastAPI backend + single-page UI (vanilla JS, EN/AR with RTL) in `audit_app/`. T
 - Excel formula integrity: `python -m pytest tests/test_excel_formulas.py -v`
 - ZATCA QR: `python -m pytest tests/test_zatca_qr.py -v`
 - Full integration: `python -m pytest tests/test_e2e.py -v`
+- CI: `.github/workflows/ci.yml` runs the suite on Python 3.11 and 3.13 for every pull request and push to `main`,
+  with OpenCV and LibreOffice installed so the QR and Excel recalculation tests cannot silently skip.

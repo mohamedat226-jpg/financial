@@ -31,6 +31,10 @@ Run the test suite (offline, ~45 s; includes a LibreOffice recalculation check w
 python -m pytest tests -q
 ```
 
+GitHub Actions (`.github/workflows/ci.yml`) runs the same suite on Python 3.11 and 3.13 for every pull request and
+push to `main`.
+
+
 ## AI extraction (Claude)
 
 Text-layer PDFs are read by a deterministic, label-driven rule engine (works offline). Scanned PDFs and

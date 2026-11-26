@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # DejaVu fonts render the sample invoices; LibreOffice Calc independently
+      # recalculates the generated working paper (tests/test_excel_formulas.py).
+      - name: Install system packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends fonts-dejavu-core libreoffice-calc
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check UI scripts parse
+        run: |
+          node --check audit_app/static/app.js
+          node --check audit_app/static/i18n.js
+
+      # The QR and LibreOffice tests skip themselves when their tool is missing.
+      # In CI both must be present, so fail early rather than pass on a skip.
+      - name: Verify QR detector and LibreOffice are available
+        run: |
+          python -c "import cv2; print('opencv', cv2.__version__)"
+          soffice --version
+
+      - name: Run tests
+        env:
+          AUDIT_EXTRACTION_MODE: rules_only
+        run: python -m pytest tests -v -rs
