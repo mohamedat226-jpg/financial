@@ -22,7 +22,7 @@ MAX_FILES_PER_BATCH = int(os.environ.get("AUDIT_MAX_FILES_PER_BATCH", "200"))
 EXTRACTION_MODE = os.environ.get("AUDIT_EXTRACTION_MODE", "auto")
 AI_MODEL = os.environ.get("AUDIT_AI_MODEL", "claude-opus-5-5")
 AI_EFFORT = os.environ.get("AUDIT_AI_EFFORT", "high")
-LOW_CONFIDENCE = float(os.environ.get("AUDIT_LOW_CONFIDENCE", "0.75"))
+LOW_CONFIDENCE = float(os.environ.get("AUDIT_LOW_CONFIDENCE", "0.85"))
 AI_ESCALATION_CONFIDENCE = float(os.environ.get("AUDIT_AI_ESCALATION_CONFIDENCE", "0.80"))
 WORKERS = int(os.environ.get("AUDIT_WORKERS", "4"))
 

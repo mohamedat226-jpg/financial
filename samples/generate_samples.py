@@ -24,6 +24,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from audit_app.extraction.zatca_qr import encode_tlv  # noqa: E402
+
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_B = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 pdfmetrics.registerFont(TTFont("DV", FONT))
@@ -83,6 +86,12 @@ def gen_invoices(rng: random.Random, n=50):
     invs[49]["date"] = date(2025, 12, 30)                                                      # cut-off window
     invs[37]["items"] = [{"desc": "Turbine overhaul project", "desc_ar": "مشروع صيانة توربين", "qty": 1,
                           "price": 2450000.0, "amount": 2450000.0}]                            # unusual amount
+    # ZATCA QR scenarios: valid Phase 1 by default; tampered PDF (QR total differs), no QR, Phase 2 tags
+    for inv in invs:
+        inv["qr"] = "valid"
+    invs[9]["qr"] = "mismatch"
+    invs[13]["qr"] = "none"
+    invs[20]["qr"] = "phase2"
     for inv in invs:
         net = round(sum(it["amount"] for it in inv["items"]) - inv["discount"], 2)
         inv["taxable"] = net
@@ -185,11 +194,40 @@ def render_invoice(inv) -> bytes:
         p.text(250, f"Total Taxable Amount / {ar('المبلغ الخاضع للضريبة')}"); p.text(555, money(inv["taxable"]), right=True); p.nl()
         p.text(250, f"Total VAT / {ar('إجمالي ضريبة القيمة المضافة')} (15%)"); p.text(555, money(inv["vat"]), right=True); p.nl()
         p.text(250, f"Grand Total / {ar('الإجمالي المستحق')}", bold=True); p.text(555, money(inv["gross"]), right=True, bold=True); p.nl()
+    draw_qr(p, inv)
     p.c.save()
     data = buf.getvalue()
     if inv.get("scanned"):
         data = to_scanned(data)
     return data
+
+
+def qr_payload(inv) -> str | None:
+    if inv.get("qr") == "none":
+        return None
+    gross = inv["gross"] + (1000.0 if inv.get("qr") == "mismatch" else 0.0)   # tampered: printed total was altered
+    tags = {1: SELLER[1] if inv["layout"] == "ar" else SELLER[0], 2: SELLER[2],
+            3: f"{inv['date'].isoformat()}T10:30:00Z", 4: f"{gross:.2f}", 5: f"{inv['vat']:.2f}"}
+    if inv.get("qr") == "phase2":   # dummy (non-cryptographic) bytes in the Phase 2 tag positions
+        tags.update({6: "dGVzdC1oYXNoLW5vdC1yZWFs", 7: bytes(range(64)), 8: bytes(range(88))})
+    return encode_tlv(tags)
+
+
+def draw_qr(p: "PDF", inv) -> None:
+    from reportlab.graphics import renderPDF
+    from reportlab.graphics.barcode.qr import QrCodeWidget
+    from reportlab.graphics.shapes import Drawing
+    payload = qr_payload(inv)
+    if not payload:
+        return
+    size = 95
+    if p.y < size + 70:
+        p.c.showPage(); p.y = p.h - 50
+    w = QrCodeWidget(payload, barLevel="M")
+    x1, y1, x2, y2 = w.getBounds()
+    d = Drawing(size, size, transform=[size / (x2 - x1), 0, 0, size / (y2 - y1), 0, 0])
+    d.add(w)
+    renderPDF.draw(d, p.c, 40, p.y - size - 10)
 
 
 def to_scanned(pdf_bytes: bytes) -> bytes:
@@ -366,7 +404,8 @@ def main(out=None):
         truth.append({"file": name, "invoice_number": inv["number"], "invoice_date": inv["date"].isoformat(),
                       "buyer_name": inv["customer"][0], "buyer_name_ar": inv["customer"][1], "currency": inv["currency"],
                       "taxable_amount": inv["taxable"], "vat_amount": inv["vat"], "gross_amount": inv["gross"],
-                      "doc_type": inv["doc_type"], "layout": inv["layout"], "scanned": bool(inv.get("scanned"))})
+                      "doc_type": inv["doc_type"], "layout": inv["layout"], "scanned": bool(inv.get("scanned")),
+                      "qr": inv["qr"]})
     build_template(out_dir / "Sales_Vouching_Invoices_Sample.xlsx")
     build_template_ar(out_dir / "Sales_Vouching_AR_Template.xlsx")
     build_ledger(invs, out_dir, rng)

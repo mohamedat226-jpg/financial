@@ -9,7 +9,10 @@ from datetime import date
 from difflib import SequenceMatcher
 
 from . import db
-from .extraction.normalize import has_arabic, norm_invoice_no, norm_party, to_date, valid_saudi_vat
+from . import config
+from .extraction import zatca_qr
+from .extraction.normalize import (business_days_between, clean_exact, has_arabic, levenshtein_ratio, norm_doc_no,
+                                 norm_invoice_no, norm_party, to_date, valid_saudi_vat)
 
 MATCH_STATUSES = ["Matched", "Not Found in Ledger", "Possible Match", "Duplicate Invoice", "Amount Mismatch",
                   "Customer Mismatch", "Ledger Not Uploaded"]
@@ -28,6 +31,7 @@ def load_invoices(eid: int) -> list[dict]:
     rows = db.q("SELECT i.*, f.original_name, f.sha256 FROM invoices i JOIN files f ON f.id=i.file_id "
                 "WHERE i.engagement_id=? ORDER BY i.id", (eid,))
     for r in rows:
+        r["zatca_qr"] = db.jload(r.get("zatca_qr"), None)
         for k in ("fields", "ai_fields", "manual", "match", "line_items", "extraction_notes"):
             r[k] = db.jload(r[k], {} if k not in ("line_items", "extraction_notes") else [])
     return rows
@@ -63,6 +67,16 @@ def name_similarity(a: str | None, b: str | None, alias_set=frozenset()) -> floa
 
 
 # ------------------------------------------------------------------------------------------- matching
+# 3-pass reconciliation:
+#   Pass 1  exact reference: clean(invoice no.) == clean(ledger ref.) AND same customer
+#   Pass 2  normalised reference: prefixes (INV-, TAX-, #), punctuation and leading zeros stripped
+#   Pass 3  heuristic: customer Levenshtein similarity > 85 %, posting date within +/-5 business days and
+#           amount within tolerance -> proposed only; the auditor must confirm (never linked automatically)
+PASS3_NAME_SIM = 0.85
+PASS3_BUSINESS_DAYS = 5
+PASS_METHODS = {1: "pass1_exact", 2: "pass2_normalized", 3: "pass3_heuristic"}
+
+
 def run_matching(eid: int, user: str) -> dict:
     eng = db.q1("SELECT * FROM engagements WHERE id=?", (eid,))
     tol = float(eng["tolerance"])
@@ -72,12 +86,12 @@ def run_matching(eid: int, user: str) -> dict:
     al = aliases(eid)
     by_no: dict[str, list[dict]] = {}
     for le in ledger:
-        k = norm_invoice_no(le["invoice_number"])
+        k = norm_doc_no(le["invoice_number"])
         if k:
             by_no.setdefault(k, []).append(le)
     inv_no_count: dict[str, int] = {}
     for i in invs:
-        k = norm_invoice_no(fv(i, "invoice_number"))
+        k = norm_doc_no(fv(i, "invoice_number"))
         if k:
             inv_no_count[k] = inv_no_count.get(k, 0) + 1
 
@@ -97,20 +111,20 @@ def run_matching(eid: int, user: str) -> dict:
             continue
         if not ledger:
             results[i["id"]] = {"status": "Ledger Not Uploaded", "ledger_id": None, "method": None, "evidence": [],
-                                "candidates": []}
+                                "candidates": [], "pass": None}
             continue
-        k = norm_invoice_no(fv(i, "invoice_number"))
+        no = fv(i, "invoice_number")
+        k = norm_doc_no(no)
         amt_sar = _sar(i, rates)
         hits = by_no.get(k, []) if k else []
-        ev, cands = [], []
         if k and inv_no_count.get(k, 0) > 1:
             cands = [_cand(le, i, amt_sar, tol, al, "Same invoice number") for le in hits]
-            results[i["id"]] = {"status": "Duplicate Invoice", "ledger_id": None, "method": None,
-                                "evidence": [f"Invoice number {fv(i, 'invoice_number')} appears on {inv_no_count[k]} invoice documents"],
+            results[i["id"]] = {"status": "Duplicate Invoice", "ledger_id": None, "method": None, "pass": None,
+                                "evidence": [f"Invoice number {no} appears on {inv_no_count[k]} invoice documents"],
                                 "candidates": cands}
             continue
         if len(hits) > 1:
-            results[i["id"]] = {"status": "Duplicate Invoice", "ledger_id": None, "method": None,
+            results[i["id"]] = {"status": "Duplicate Invoice", "ledger_id": None, "method": None, "pass": None,
                                 "evidence": [f"Invoice number recorded {len(hits)} times in the ledger (rows "
                                              f"{', '.join(str(h['row_number']) for h in hits)})"],
                                 "candidates": [_cand(le, i, amt_sar, tol, al, "Same invoice number") for le in hits]}
@@ -118,9 +132,18 @@ def run_matching(eid: int, user: str) -> dict:
         if len(hits) == 1:
             le = hits[0]
             linked.add(le["id"])
-            results[i["id"]] = _evaluate_link(i, le, amt_sar, tol, al, "invoice_number")
+            exact = clean_exact(no) == clean_exact(le["invoice_number"])
+            same_cust = bool(le["customer"]) and (norm_party(fv(i, "buyer_name")) == norm_party(le["customer"])
+                                                  or (norm_party(fv(i, "buyer_name")), norm_party(le["customer"])) in al)
+            ps = 1 if exact and same_cust else 2
+            res = _evaluate_link(i, le, amt_sar, tol, al, PASS_METHODS[ps])
+            res["pass"] = ps
+            res["evidence"].insert(0, "Pass 1 - exact invoice number and customer" if ps == 1 else
+                                   f"Pass 2 - normalised invoice number ('{no}' / '{le['invoice_number']}' -> {k})"
+                                   + ("" if same_cust else "; customer name differs"))
+            results[i["id"]] = res
             continue
-        results[i["id"]] = None  # resolve after all number matches have reserved their ledger rows
+        results[i["id"]] = None  # Pass 3 after all number matches have reserved their ledger rows
 
     for i in invs:
         if results.get(i["id"]) is not None:
@@ -133,16 +156,19 @@ def run_matching(eid: int, user: str) -> dict:
             c = _cand(le, i, amt_sar, tol, al, None)
             if c["score"] >= 0.6:
                 cands.append(c)
-        cands.sort(key=lambda c: -c["score"])
+        cands.sort(key=lambda c: (not c["pass3_criteria_met"], -c["score"]))
         if cands:
-            results[i["id"]] = {"status": "Possible Match", "ledger_id": None, "method": "suggested",
-                                "evidence": ["No ledger entry with the same invoice number; candidates proposed on "
-                                             "customer, date and amount - auditor confirmation required"],
+            strong = sum(1 for c in cands if c["pass3_criteria_met"])
+            results[i["id"]] = {"status": "Possible Match", "ledger_id": None, "method": PASS_METHODS[3], "pass": 3,
+                                "evidence": ["Pass 3 - no ledger entry with the same invoice number; candidates proposed on "
+                                             f"customer (Levenshtein > {PASS3_NAME_SIM:.0%}), date (±{PASS3_BUSINESS_DAYS} "
+                                             "business days) and amount (within tolerance) - auditor sign-off required",
+                                             f"{strong} candidate(s) meet all Pass 3 criteria; {len(cands) - strong} partial"],
                                 "candidates": cands[:5]}
         else:
-            results[i["id"]] = {"status": "Not Found in Ledger", "ledger_id": None, "method": None,
-                                "evidence": ["No ledger entry with this invoice number, and no entry matching "
-                                             "customer, date and amount"], "candidates": []}
+            results[i["id"]] = {"status": "Not Found in Ledger", "ledger_id": None, "method": None, "pass": None,
+                                "evidence": ["No ledger entry with this invoice number (Pass 1/2), and no entry matching "
+                                             "customer, date and amount (Pass 3)"], "candidates": []}
 
     with db.tx() as c:
         for iid, m in results.items():
@@ -176,21 +202,28 @@ def _cand(le, inv, amt_sar, tol, al, reason):
     reasons, score = [], 0.0
     if reason:
         reasons.append(reason)
-    if amt_sar is not None and le["amount"] is not None and abs(le["amount"] - amt_sar) <= tol:
-        score += 0.5; reasons.append(f"Amount agrees ({le['amount']:,.2f})")
-    sim = name_similarity(fv(inv, "buyer_name"), le["customer"], al)
-    if sim >= 0.8:
-        score += 0.3; reasons.append(f"Customer similar ({sim:.0%})")
+    amt_ok = amt_sar is not None and le["amount"] is not None and abs(le["amount"] - amt_sar) <= tol
+    if amt_ok:
+        score += 0.5; reasons.append(f"Amount agrees within tolerance ({le['amount']:,.2f})")
+    lev = levenshtein_ratio(fv(inv, "buyer_name"), le["customer"])
+    alias = (norm_party(fv(inv, "buyer_name")), norm_party(le["customer"])) in al
+    name_ok = alias or lev > PASS3_NAME_SIM
+    if name_ok:
+        score += 0.3; reasons.append("Customer is a confirmed alias" if alias and lev <= PASS3_NAME_SIM
+                                     else f"Customer similar (Levenshtein {lev:.0%})")
+    elif name_similarity(fv(inv, "buyer_name"), le["customer"], al) >= 0.8:
+        score += 0.2; reasons.append(f"Customer partly similar (Levenshtein {lev:.0%})")
     d1, d2 = to_date(fv(inv, "invoice_date")), to_date(le["date"])
-    if d1 and d2:
-        dd = abs((d1 - d2).days)
-        if dd <= 3:
-            score += 0.2; reasons.append(f"Date within {dd} day(s)")
-        elif dd <= 7:
-            score += 0.1; reasons.append(f"Date within {dd} days")
+    bd = business_days_between(d1, d2) if d1 and d2 else None
+    if bd is not None:
+        if bd <= PASS3_BUSINESS_DAYS:
+            score += 0.2; reasons.append(f"Posting date within {bd} business day(s)")
+        elif bd <= 2 * PASS3_BUSINESS_DAYS:
+            score += 0.1; reasons.append(f"Posting date {bd} business days apart")
     return {"ledger_id": le["id"], "row_number": le["row_number"], "invoice_number": le["invoice_number"],
             "customer": le["customer"], "date": le["date"], "amount": le["amount"], "score": round(score, 2),
-            "reasons": reasons}
+            "reasons": reasons, "levenshtein": lev, "business_days": bd,
+            "pass3_criteria_met": bool(amt_ok and name_ok and bd is not None and bd <= PASS3_BUSINESS_DAYS)}
 
 
 def _evaluate_link(inv, le, amt_sar, tol, al, method):
@@ -218,7 +251,7 @@ def _refresh_confirmed(inv, prev, ledger, rates, tol, al):
         return {**prev, "status": "Not Found in Ledger"}
     le = next(x for x in ledger if x["id"] == prev["ledger_id"])
     res = _evaluate_link(inv, le, _sar(inv, rates), tol, al, "auditor_confirmed")
-    res.update(confirmed_by=prev.get("confirmed_by"), confirmed_at=prev.get("confirmed_at"))
+    res.update(confirmed_by=prev.get("confirmed_by"), confirmed_at=prev.get("confirmed_at"), **{"pass": prev.get("pass")})
     res["evidence"].insert(0, f"Link confirmed by {prev.get('confirmed_by')} on {prev.get('confirmed_at')}")
     return res
 
@@ -254,6 +287,7 @@ def compute_rows(eid: int) -> list[dict]:
             dstat = "Difference Identified"
         manual = inv["manual"] or {}
         d = to_date(fv(inv, "invoice_date"))
+        recon = recon_category(m.get("status"), D, J, K, tol)
         rows.append({
             "invoice_id": inv["id"], "sno": n, "file": inv["original_name"], "status": inv["status"],
             "customer": fv(inv, "buyer_name"), "product_type": fv(inv, "description"), "ledger_amount": D,
@@ -261,7 +295,8 @@ def compute_rows(eid: int) -> list[dict]:
             "invoice_number": fv(inv, "invoice_number"), "exchange_rate": I, "amount_sar": J, "difference": K,
             "vat_amount": fv(inv, "vat_amount"), "gross_amount": fv(inv, "gross_amount"),
             "vat_rate": fv(inv, "vat_rate"), "doc_type": inv["doc_type"],
-            "manual": manual, "match_status": m.get("status") or "Ledger Not Uploaded",
+            "manual": manual, "match_status": m.get("status") or "Ledger Not Uploaded", "recon_category": recon,
+            "match_pass": m.get("pass"), "zatca_qr": _qr_summary(inv), "qr_status": _qr_status(inv),
             "match_method": m.get("method"), "diff_status": dstat, "missing": missing,
             "review_status": inv["review_status"], "reviewer": inv["reviewer"],
             "confidence": inv["overall_confidence"], "method": inv["extraction_method"],
@@ -271,6 +306,59 @@ def compute_rows(eid: int) -> list[dict]:
             "suggestion": suggest_explanation(inv, D, J, K, tol),
         })
     return rows
+
+
+RECON_CATEGORIES = ["MATCHED_CLEAN", "WITHIN_TOLERANCE", "MATERIAL_DIFFERENCE", "NOT_IN_LEDGER", "POSSIBLE_MATCH",
+                    "DUPLICATE_INVOICE", "INCOMPLETE_DATA", "LEDGER_NOT_UPLOADED", "UNMATCHED_LEDGER_ROW"]
+
+
+def recon_category(match_status, D, J, K, tol) -> str:
+    """Discrepancy category (Section 4 of the specification). UNMATCHED_LEDGER_ROW applies to ledger rows only."""
+    if match_status == "Duplicate Invoice":
+        return "DUPLICATE_INVOICE"
+    if match_status == "Not Found in Ledger":
+        return "NOT_IN_LEDGER"
+    if match_status == "Possible Match":
+        return "POSSIBLE_MATCH"
+    if match_status in (None, "Ledger Not Uploaded"):
+        return "LEDGER_NOT_UPLOADED"
+    if D is None or J is None or K is None:
+        return "INCOMPLETE_DATA"
+    if K == 0:
+        return "MATCHED_CLEAN"
+    return "WITHIN_TOLERANCE" if abs(K) <= tol else "MATERIAL_DIFFERENCE"
+
+
+def _qr_summary(inv) -> dict | None:
+    q = inv.get("zatca_qr")
+    if q is None:
+        return None
+    if not q.get("payload"):
+        return {"found": False}
+    d = q.get("decoded") or {}
+    return {"found": True, "page": q.get("page"), "bbox": q.get("bbox"), "tlv_valid": d.get("tlv_valid"),
+            "phase": d.get("phase"), "seller_name": d.get("seller_name"), "vat_registration": d.get("vat_registration"),
+            "timestamp": d.get("timestamp"), "invoice_total": d.get("invoice_total"), "vat_total": d.get("vat_total"),
+            "signature_verified": False, "errors": d.get("errors", []), "warnings": d.get("warnings", [])}
+
+
+def _qr_status(inv) -> str:
+    q = inv.get("zatca_qr")
+    if q is None:
+        return "not_checked"
+    if not q.get("payload"):
+        return "not_found"
+    d = q.get("decoded") or {}
+    return f"valid_phase{d.get('phase')}" if d.get("tlv_valid") else "invalid"
+
+
+def unmatched_ledger_rows(eid: int, invs: list[dict] | None = None, ledger: list[dict] | None = None) -> list[dict]:
+    """Ledger entries not linked to, nor proposed for, any invoice (fictitious revenue / occurrence risk)."""
+    invs = invs if invs is not None else [i for i in load_invoices(eid) if i["status"] != "superseded"]
+    ledger = ledger if ledger is not None else load_ledger(eid)
+    linked = {(i["match"] or {}).get("ledger_id") for i in invs}
+    cand = {c["ledger_id"] for i in invs for c in (i["match"] or {}).get("candidates", [])}
+    return [le for le in ledger if le["id"] not in linked and le["id"] not in cand]
 
 
 def suggest_explanation(inv, D, J, K, tol) -> str | None:
@@ -308,7 +396,10 @@ PROC = {
     "CURRENCY_MISSING": "Confirm the invoice currency with the client and the sales contract.",
     "FX_MISSING": "Enter the authorised exchange rate for the currency (source: SAMA / approved policy rate) in engagement settings.",
     "VAT_RECALC": "Recalculate VAT at the applicable rate; investigate rounding or rate error; consider VAT return impact.",
-    "GROSS_ARITH": "Re-perform invoice arithmetic (taxable + VAT = total) and discuss errors with the client.",
+    "VAT_ARITHMETIC_ERROR": "Re-perform invoice arithmetic (taxable + VAT = total, tolerance SAR 0.05) and discuss errors with the client.",
+    "ZATCA_QR_MISSING": "Confirm whether the invoice should carry a ZATCA QR code under the e-invoicing phase applicable to the seller and invoice type; obtain the FATOORA-generated invoice.",
+    "ZATCA_QR_INVALID": "Obtain the original e-invoice (XML / FATOORA copy); a malformed QR may indicate a non-compliant or altered document.",
+    "ZATCA_QR_MISMATCH": "Compare the printed invoice with the QR data and the original e-invoice XML; a difference may indicate an altered PDF - escalate under ISA 240.",
     "LINE_SUM": "Re-add the invoice line items and agree to the invoice net total.",
     "VAT_RATE": "Confirm the VAT treatment (standard 15%, zero-rated or exempt) and supporting conditions.",
     "SELLER_VAT": "Verify the seller VAT registration number against the entity's ZATCA registration certificate.",
@@ -340,7 +431,8 @@ def _f(code, risk, obs, reason, doc, **kw):
     return {"code": code, "risk": risk, "observation": obs, "reason": reason, "document": doc, "procedure": PROC[code], **kw}
 
 
-def run_checks(eid: int, low_conf: float = 0.75) -> list[dict]:
+def run_checks(eid: int, low_conf: float | None = None) -> list[dict]:
+    low_conf = config.LOW_CONFIDENCE if low_conf is None else low_conf
     eng = db.q1("SELECT * FROM engagements WHERE id=?", (eid,))
     tol = float(eng["tolerance"])
     mat = float(eng["materiality"]) if eng["materiality"] else None
@@ -395,7 +487,7 @@ def run_checks(eid: int, low_conf: float = 0.75) -> list[dict]:
                 add(_f("VAT_RECALC", "Medium", f"VAT recalculation difference: invoice {float(V):,.2f} vs recalculated {exp:,.2f}",
                        f"VAT at {rate}% on {float(T):,.2f}", p("vat_amount")))
         if T is not None and V is not None and G is not None and abs(float(T) + float(V) - float(G)) > 0.05:
-            add(_f("GROSS_ARITH", "Medium", f"Invoice arithmetic error: {float(T):,.2f} + {float(V):,.2f} ≠ {float(G):,.2f}",
+            add(_f("VAT_ARITHMETIC_ERROR", "Medium", f"Invoice arithmetic error: {float(T):,.2f} + {float(V):,.2f} ≠ {float(G):,.2f}",
                    "Taxable amount plus VAT does not equal invoice total", p("gross_amount")))
         items = inv["line_items"] or []
         if T is not None and items and all(it.get("amount") is not None for it in items):
@@ -413,6 +505,8 @@ def run_checks(eid: int, low_conf: float = 0.75) -> list[dict]:
             add(_f("SELLER_VAT", "Low", f"Seller VAT number {sv} does not follow the 15-digit format (3…3)", "Format check", p("seller_vat")))
         if bv and not valid_saudi_vat(bv):
             add(_f("BUYER_VAT", "Low", f"Buyer VAT number {bv} does not follow the 15-digit format (3…3)", "Format check", p("buyer_vat")))
+        for qf in _qr_checks(inv, r, doc):
+            add(qf)
         if inv["doc_type"] in ("proforma", "quotation"):
             add(_f("DOC_TYPE", "High", f"Document is a {inv['doc_type']}, not a tax invoice", "Not valid evidence of a sale", doc))
         if inv["doc_type"] == "credit_note":
@@ -478,15 +572,47 @@ def run_checks(eid: int, low_conf: float = 0.75) -> list[dict]:
             add(_f("PRICE_NOT_MATCHED", "Medium", "Selling price does not agree with the approved price list", "Pricing control exception", doc))
 
     # ledger-side checks
-    linked = {(i["match"] or {}).get("ledger_id") for i in invs.values()}
-    cand_ids = {c["ledger_id"] for i in invs.values() for c in (i["match"] or {}).get("candidates", [])}
-    for le in ledger:
-        if le["id"] not in linked and le["id"] not in cand_ids:
-            out.append({**_f("LEDGER_NO_INVOICE", "High" if (le["amount"] or 0) >= (mat or 0) and mat else "Medium",
-                             f"Ledger row {le['row_number']} ({le['invoice_number'] or 'no invoice no.'}, {le['customer'] or '-'}, "
-                             f"{(le['amount'] or 0):,.2f}) has no supporting invoice in the uploaded population",
-                             "Recorded sale not vouched to an invoice", f"Sales ledger row {le['row_number']}"), "ledger_id": le["id"]})
+    for le in unmatched_ledger_rows(eid, list(invs.values()), ledger):
+        out.append({**_f("LEDGER_NO_INVOICE", "High" if (le["amount"] or 0) >= (mat or 0) and mat else "Medium",
+                         f"Ledger row {le['row_number']} ({le['invoice_number'] or 'no invoice no.'}, {le['customer'] or '-'}, "
+                         f"{(le['amount'] or 0):,.2f}) has no supporting invoice in the uploaded population",
+                         "Recorded sale not vouched to an invoice", f"Sales ledger row {le['row_number']}"), "ledger_id": le["id"]})
     _store_findings(eid, out)
+    return out
+
+
+def _qr_checks(inv, r, doc) -> list[dict]:
+    """Cross-check the ZATCA QR (seller VAT, timestamp date, total incl. VAT, VAT total) against the invoice."""
+    q = inv.get("zatca_qr")
+    if q is None or inv["status"] == "needs_manual" and not q.get("payload"):
+        return []   # detector unavailable, or nothing readable at all (already flagged NEEDS_MANUAL)
+    out = []
+    if not q.get("payload"):
+        if inv["doc_type"] in ("tax_invoice", "simplified_tax_invoice", "credit_note"):
+            out.append(_f("ZATCA_QR_MISSING", "Low", "No ZATCA QR code detected on the tax invoice",
+                          "QR code is mandatory for simplified tax invoices (Phase 1) and for all e-invoices from Phase 2", doc))
+        return out
+    d = q.get("decoded") or {}
+    loc = f"{doc} p.{q.get('page')} (QR)"
+    if not d.get("tlv_valid"):
+        out.append(_f("ZATCA_QR_INVALID", "Medium", "QR code is not a valid ZATCA TLV: " + "; ".join(d.get("errors", [])),
+                      "Structure / mandatory tags 1-5 check", loc))
+        return out
+    diffs = []
+    sv = fv(inv, "seller_vat")
+    if sv and d.get("vat_registration") and str(sv) != d["vat_registration"]:
+        diffs.append(f"seller VAT {sv} vs QR {d['vat_registration']}")
+    G, V = fv(inv, "gross_amount"), fv(inv, "vat_amount")
+    if G is not None and d.get("invoice_total") is not None and abs(abs(float(G)) - abs(d["invoice_total"])) > 0.05:
+        diffs.append(f"total incl. VAT {float(G):,.2f} vs QR {d['invoice_total']:,.2f}")
+    if V is not None and d.get("vat_total") is not None and abs(abs(float(V)) - abs(d["vat_total"])) > 0.05:
+        diffs.append(f"VAT {float(V):,.2f} vs QR {d['vat_total']:,.2f}")
+    qd, idt = zatca_qr.qr_date(d), to_date(r["invoice_date"])
+    if qd and idt and qd != idt:
+        diffs.append(f"invoice date {idt} vs QR timestamp {d.get('timestamp')}")
+    if diffs:
+        out.append(_f("ZATCA_QR_MISMATCH", "High", "Printed invoice disagrees with its ZATCA QR: " + "; ".join(diffs),
+                      "QR data is generated by the e-invoicing solution; differences may indicate an altered document", loc))
     return out
 
 
@@ -544,5 +670,12 @@ def summary(eid: int) -> dict:
         "total_differences": s(r["difference"] for r in rows if r["diff_status"] == "Difference Identified"),
         "net_differences": s(r["difference"] for r in rows),
         "approved": sum(1 for r in rows if r["review_status"] == "approved"),
+        "recon_categories": {**{k: sum(1 for r in rows if r["recon_category"] == k) for k in RECON_CATEGORIES},
+                             "UNMATCHED_LEDGER_ROW": len(unmatched_ledger_rows(eid, ledger=ledger))},
+        "match_passes": {f"pass{p}": sum(1 for r in rows if r["match_pass"] == p) for p in (1, 2, 3)},
+        "qr": {"checked": sum(1 for r in rows if r["zatca_qr"] is not None),
+               "found": sum(1 for r in rows if (r["zatca_qr"] or {}).get("found")),
+               "valid": sum(1 for r in rows if (r["zatca_qr"] or {}).get("tlv_valid"))},
+        "low_confidence_threshold": config.LOW_CONFIDENCE,
         "outstanding_procedures": outstanding,
     }

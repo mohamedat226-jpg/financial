@@ -3,6 +3,7 @@ to a page and bounding box. Optional Tesseract OCR for scanned pages if installe
 from __future__ import annotations
 
 import io
+import threading
 import shutil
 from dataclasses import dataclass, field
 
@@ -103,17 +104,27 @@ def tesseract_available() -> bool:
         return False
 
 
+# PDFium is not thread-safe: every pypdfium2 call in the application must hold this lock
+# (extraction runs on several worker threads alongside page-image requests from the UI).
+PDFIUM_LOCK = threading.RLock()
+
+
 def _ocr(path: str) -> DocText | None:
     import pypdfium2 as pdfium
     import pytesseract
-    pdf = pdfium.PdfDocument(path)
-    doc = DocText(pages=len(pdf), ocr_used=True)
     scale = 300 / 72
-    for i in range(len(pdf)):
-        page = pdf[i]
-        pw, ph = page.get_size()
+    with PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(path)
+        try:
+            pages = []
+            for i in range(len(pdf)):
+                page = pdf[i]
+                pages.append((page.get_size(), page.render(scale=scale).to_pil()))
+        finally:
+            pdf.close()
+    doc = DocText(pages=len(pages), ocr_used=True)
+    for i, ((pw, ph), img) in enumerate(pages):
         doc.page_sizes.append((pw, ph))
-        img = page.render(scale=scale).to_pil()
         data = pytesseract.image_to_data(img, lang="ara+eng", output_type=pytesseract.Output.DICT)
         words = []
         for j, txt in enumerate(data["text"]):
@@ -126,9 +137,12 @@ def _ocr(path: str) -> DocText | None:
 
 def render_page_png(path: str, page_no: int, scale: float = 1.6) -> bytes:
     import pypdfium2 as pdfium
-    pdf = pdfium.PdfDocument(path)
-    page = pdf[page_no - 1]
-    img = page.render(scale=scale).to_pil()
+    with PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(path)
+        try:
+            img = pdf[page_no - 1].render(scale=scale).to_pil()
+        finally:
+            pdf.close()
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()

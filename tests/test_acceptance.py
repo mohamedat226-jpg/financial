@@ -6,31 +6,13 @@ from __future__ import annotations
 
 import io
 import json
-import os
-import sys
-import tempfile
-import time
-from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-TMP = Path(tempfile.mkdtemp(prefix="audit_test_"))
-os.environ["AUDIT_DATA_DIR"] = str(TMP / "data")
-os.environ["AUDIT_EXTRACTION_MODE"] = "rules_only"
-os.environ["AUDIT_ADMIN_PASSWORD"] = "Admin#12345"
-
-from fastapi.testclient import TestClient  # noqa: E402
-from openpyxl import load_workbook  # noqa: E402
-
-from samples.generate_samples import main as gen  # noqa: E402
-
-PACK = TMP / "pack"
-gen(str(PACK))
-TRUTH = {t["file"]: t for t in json.loads((PACK / "ground_truth.json").read_text(encoding="utf-8"))}
-
-from audit_app.api import app  # noqa: E402
+from audit_app.api import app
+from tests.conftest import PACK, TMP, TRUTH, wait_extraction as _wait
 
 
 @pytest.fixture(scope="module")
@@ -44,16 +26,6 @@ def ctx():
         assert r.status_code == 200, r.text
         eid = r.json()["id"]
         yield c, eid
-
-
-def _wait(c, eid, timeout=300):
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        p = c.get(f"/api/engagements/{eid}/progress").json()
-        if p.get("total") and not p.get("queued") and not p.get("processing"):
-            return p
-        time.sleep(0.5)
-    raise AssertionError("extraction timed out")
 
 
 def _rows(c, eid):

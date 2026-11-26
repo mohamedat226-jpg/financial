@@ -133,10 +133,10 @@ def _process_invoice(iid: int):
         with db.tx() as c:
             c.execute("UPDATE invoices SET status=?, doc_type=?, language=?, page_count=?, has_text_layer=?, extraction_method=?, "
                       "overall_confidence=?, fields=?, ai_fields=COALESCE(ai_fields, ?), line_items=?, extraction_notes=?, "
-                      "error=NULL, updated_at=? WHERE id=?",
+                      "zatca_qr=?, error=NULL, updated_at=? WHERE id=?",
                       (res["status"], res["doc_type"], res["language"], res["page_count"], int(res["has_text_layer"]),
                        res["method"], pipeline.overall_confidence(fields), db.jdump(fields), db.jdump(res["fields"]),
-                       db.jdump(res["line_items"]), db.jdump(res["notes"]), db.now(), iid))
+                       db.jdump(res["line_items"]), db.jdump(res["notes"]), db.jdump(res.get("zatca_qr")), db.now(), iid))
             db.log("system", inv["engagement_id"], "invoice", iid, "extracted",
                    note=f"{res['method']} status={res['status']} confidence={res['confidence']}", c=c)
     except Exception as e:  # noqa: BLE001
@@ -473,9 +473,14 @@ def invoice_page(iid: int, page: int, user=Depends(current_user)):
     i = db.q1("SELECT f.stored_path, i.page_count FROM invoices i JOIN files f ON f.id=i.file_id WHERE i.id=?", (iid,))
     if not i:
         raise HTTPException(404)
-    from .extraction.pdf_text import render_page_png
+    from .extraction.pdf_text import PDFIUM_LOCK, render_page_png
     import pypdfium2 as pdfium
-    n = len(pdfium.PdfDocument(i["stored_path"]))
+    with PDFIUM_LOCK:
+        _pdf = pdfium.PdfDocument(i["stored_path"])
+        try:
+            n = len(_pdf)
+        finally:
+            _pdf.close()
     if not 1 <= page <= n:
         raise HTTPException(404, "Page out of range")
     import pdfplumber

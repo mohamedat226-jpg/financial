@@ -25,7 +25,7 @@ Generate a fictitious test pack (template, 50 invoices, ledger with planted exce
 python samples/generate_samples.py samples/pack
 ```
 
-Run the acceptance tests (offline, ~10 s):
+Run the test suite (offline, ~45 s; includes a LibreOffice recalculation check when `soffice` is installed):
 
 ```bash
 python -m pytest tests -q
@@ -45,7 +45,7 @@ auditor instead of being silently resolved.
 | `AUDIT_AI_MODEL` / `AUDIT_AI_EFFORT` | `claude-opus-5-5` / `high` | Model and effort level. |
 | `AUDIT_DATA_DIR` | `./data` | SQLite database, preserved uploads (read-only) and generated outputs. |
 | `AUDIT_WORKERS` | `4` | Parallel extraction workers. |
-| `AUDIT_LOW_CONFIDENCE` | `0.75` | Below this, fields are highlighted and raise a finding until confirmed. |
+| `AUDIT_LOW_CONFIDENCE` | `0.85` | Below this, fields are highlighted and raise a `LOW_CONFIDENCE` finding until confirmed. |
 
 Optional local OCR: install `pytesseract` and the `tesseract` binary with `ara` + `eng` language data.
 
@@ -59,19 +59,29 @@ under your engagement terms and client confidentiality obligations before enabli
 2. **Uploads** – working-paper template (`.xlsx`), sales ledger (`.xlsx` / `.csv`; columns auto-detected),
    invoices (bulk PDF drag-and-drop). Files are validated (type, signature, size), hashed (SHA-256) and stored read-only.
 3. **Extraction** – fields with value, confidence, method, page, bounding box and source text.
-4. **Matching** – invoice number is the primary key (format-insensitive). Where it fails, candidates are proposed
-   on customer / date / amount and **require auditor confirmation**. Statuses: Matched, Not Found in Ledger,
-   Possible Match, Duplicate Invoice, Amount Mismatch, Customer Mismatch.
+4. **Matching (3 passes)** – *Pass 1* exact invoice number and customer; *Pass 2* normalised number (prefixes
+   `INV-`, `TAX-`, `#`, punctuation and leading zeros stripped; other series such as `CN-` kept apart); *Pass 3*
+   heuristic proposals – customer Levenshtein similarity > 85 %, posting date within ±5 business days (KSA weekend
+   Friday–Saturday) and amount within tolerance – which **require auditor confirmation** and are never linked
+   automatically. Statuses: Matched, Not Found in Ledger, Possible Match, Duplicate Invoice, Amount Mismatch,
+   Customer Mismatch. Reconciliation categories: `MATCHED_CLEAN`, `WITHIN_TOLERANCE`, `MATERIAL_DIFFERENCE`,
+   `NOT_IN_LEDGER`, `POSSIBLE_MATCH`, `DUPLICATE_INVOICE`, `INCOMPLETE_DATA`, and `UNMATCHED_LEDGER_ROW` for
+   ledger entries with no invoice.
 5. **Calculations** – J = E × I; K = D − J; difference status against the configurable tolerance.
-6. **Audit checks** – 30+ checks (completeness of key fields, VAT recalculation, arithmetic, line-item totals,
+6. **ZATCA QR** – the QR code on each invoice is located (last / first page, also on scanned images) and its
+   Base64 TLV decoded: tags 1–5 (seller, VAT number, timestamp, total incl. VAT, VAT total) and Phase 2 tags 6–9.
+   Seller VAT, date, total and VAT are compared with the printed invoice (`ZATCA_QR_MISMATCH`, `ZATCA_QR_INVALID`,
+   `ZATCA_QR_MISSING`). QR data is evidence only – it never fills working-paper fields – and the Phase 2
+   cryptographic signature is **not** verified (that needs the signed XML and ZATCA's certificate chain).
+7. **Audit checks** – 30+ checks (completeness of key fields, VAT recalculation, arithmetic (`VAT_ARITHMETIC_ERROR` when |taxable + VAT − total| > 0.05), line-item totals,
    VAT number format, duplicates, ledger entries without invoices, differences, credit notes, unusual amounts,
    period / cut-off, low confidence, auditor-recorded evidence failures), each with observation, risk,
    reason, supporting document, recommended procedure and review status.
-7. **Review** – page image with highlighted source locations, edit / confirm fields (reason required and logged),
+8. **Review** – page image with highlighted source locations, edit / confirm fields (reason required and logged),
    ledger record and match evidence, manual evidence (columns L–O), AI-suggested explanation for P (written only
    after the auditor saves it), approve / investigate / reject, comments, change history.
-8. **Dashboard** – 10 KPIs, 7 charts and 8 filters, all computed from the same rows as the working paper.
-9. **Export** – completed working paper (copy of the template), PDF findings report, CSV extraction report,
+9. **Dashboard** – 11 KPIs, 7 charts and 9 filters (incl. reconciliation category), all computed from the same rows as the working paper.
+10. **Export** – completed working paper (copy of the template), PDF findings report, CSV extraction report,
    Excel exception report, extraction log + audit trail. **Finalise** (manager/partner) requires every invoice
    approved or rejected and no open high-risk findings; the engagement is then locked.
 

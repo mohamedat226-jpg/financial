@@ -66,12 +66,16 @@ function statusBadge(s) {
     "Possible Match": "warn", "Customer Mismatch": "warn", "Missing Ledger Amount": "warn", "pending": "neutral", "investigate": "warn",
     "Amount Mismatch": "crit", "Not Found in Ledger": "crit", "Duplicate Invoice": "crit", "Difference Identified": "crit",
     "Missing Invoice Data": "serious", "needs_manual": "serious", "failed": "crit", "rejected": "crit", "open": "warn", "escalated": "serious",
-    "High": "crit", "Medium": "warn", "Low": "neutral", "Ledger Not Uploaded": "neutral", "queued": "neutral", "processing": "neutral" };
+    "High": "crit", "Medium": "warn", "Low": "neutral", "Ledger Not Uploaded": "neutral", "queued": "neutral", "processing": "neutral",
+    "MATCHED_CLEAN": "good", "WITHIN_TOLERANCE": "good", "MATERIAL_DIFFERENCE": "crit", "NOT_IN_LEDGER": "crit", "POSSIBLE_MATCH": "warn",
+    "DUPLICATE_INVOICE": "crit", "INCOMPLETE_DATA": "serious", "LEDGER_NOT_UPLOADED": "neutral", "UNMATCHED_LEDGER_ROW": "crit" };
   const icon = { good: "✓", warn: "!", crit: "✕", serious: "▲", neutral: "•" };
   const c = map[s] || "neutral";
   return `<span class="badge b-${c}">${icon[c]} ${esc(s)}</span>`;
 }
-const confBar = (c) => (c === null || c === undefined ? "" : `<span class="conf ${c < 0.75 ? "low" : ""}" title="${pct(c)}"><i style="width:${Math.round(c * 100)}%"></i></span> <span class="small muted">${pct(c)}</span>`);
+const lowConf = () => (S.summary && S.summary.low_confidence_threshold) || 0.85;
+const RECON = ["MATCHED_CLEAN", "WITHIN_TOLERANCE", "MATERIAL_DIFFERENCE", "NOT_IN_LEDGER", "POSSIBLE_MATCH", "DUPLICATE_INVOICE", "INCOMPLETE_DATA", "LEDGER_NOT_UPLOADED"];
+const confBar = (c) => (c === null || c === undefined ? "" : `<span class="conf ${c < lowConf() ? "low" : ""}" title="${pct(c)}"><i style="width:${Math.round(c * 100)}%"></i></span> <span class="small muted">${pct(c)}</span>`);
 
 /* --------------------------------------------------------------------------------------- shell */
 async function render() {
@@ -238,7 +242,7 @@ const upload = wrap(async (kind, files) => {
 
 /* ------------------------------------------------------------------------------- extraction view */
 function viewExtraction(v) {
-  const low = 0.75;
+  const low = lowConf();
   v.innerHTML = `<div class="card"><div class="row"><h3>${t("extraction")}</h3><span class="spacer"></span>
     <input id="q" placeholder="Search invoice / customer / file" style="min-width:240px">
     <div class="legend"><span><i style="background:var(--warn-soft);border:1px solid var(--warn)"></i>Low confidence</span><span><i style="background:var(--crit-soft);border:1px solid var(--crit)"></i>Missing</span><span><span class="badge b-aud">✓</span> Auditor-confirmed</span></div></div>
@@ -271,6 +275,7 @@ function filtered() {
   return S.rows.filter((r) => (!f.from || (r.invoice_date && r.invoice_date >= f.from)) && (!f.to || (r.invoice_date && r.invoice_date <= f.to))
     && (!f.customer || r.customer === f.customer) && (!f.invno || (r.invoice_number || "").toLowerCase().includes(f.invno.toLowerCase()))
     && (!f.currency || r.currency === f.currency) && (!f.match || r.match_status === f.match) && (!f.diff || r.diff_status === f.diff)
+    && (!f.recon || r.recon_category === f.recon)
     && (!f.review || r.review_status === f.review));
 }
 function viewDashboard(v) {
@@ -285,6 +290,7 @@ function viewDashboard(v) {
     ${sel("currency", t("currency"), uniq("currency"))}
     ${sel("match", t("match"), ["Matched", "Not Found in Ledger", "Possible Match", "Duplicate Invoice", "Amount Mismatch", "Customer Mismatch", "Ledger Not Uploaded"])}
     ${sel("diff", t("diffStatus"), ["No Difference", "Difference Identified", "Missing Ledger Amount", "Missing Invoice Data"])}
+    ${sel("recon", t("recon"), RECON)}
     ${sel("review", t("reviewStatus"), ["pending", "approved", "investigate", "rejected"])}
     <button id="fr">${t("reset")}</button></div>
     <div class="kpis" id="kpis"></div>
@@ -305,6 +311,7 @@ function drawDash() {
     ["kDup", R.filter((r) => r.match_status === "Duplicate Invoice").length, ""], ["kDiff", R.filter((r) => r.diff_status === "Difference Identified").length, `Tolerance SAR ${fmt(S.eng.tolerance)}`],
     ["kInvTotal", fmt(sum(R.map((r) => r.amount_sar))), `${R.filter((r) => r.amount_sar === null).length} without SAR amount`],
     ["kLedger", fmt(sum(R.map((r) => r.ledger_amount))), "Linked ledger rows only"], ["kNetDiff", fmt(sum(R.map((r) => r.difference))), "Ledger − invoice (SAR)"],
+    ["kLedgerNoInv", ((S.summary || {}).recon_categories || {}).UNMATCHED_LEDGER_ROW ?? 0, "UNMATCHED_LEDGER_ROW · whole ledger (not filtered)"],
   ];
   $("#kpis").innerHTML = k.map(([l, val, s]) => `<div class="kpi"><div class="k">${t(l)}</div><div class="v">${esc(val)}</div><div class="s">${esc(s)}</div></div>`).join("");
   const ids = ["cCountMonth", "cAmtMonth", "cAmtCust", "cMatch", "cDiff", "cCur", "cConf"];
@@ -335,9 +342,9 @@ function drawDash() {
   mk("cCur", { type: "doughnut", data: { labels: curs, datasets: [{ data: curs.map((c) => R.filter((r) => (r.currency || "Not identified") === c).length), backgroundColor: SERIES().slice(0, curs.length), borderColor: css("--surface"), borderWidth: 2 }] },
     options: { responsive: true, maintainAspectRatio: false, animation: false, cutout: "62%", plugins: { legend: { position: "bottom" } } } });
   const bins = ["<50%", "50–75%", "75–90%", "≥90%", "Not extracted"];
-  const binOf = (c) => (c === null || c === 0 ? 4 : c < 0.5 ? 0 : c < 0.75 ? 1 : c < 0.9 ? 2 : 3);
+  const binOf = (c) => (c === null || c === 0 ? 4 : c < 0.5 ? 0 : c < lowConf() ? 1 : c < 0.9 ? 2 : 3);
   mk("cConf", { type: "bar", data: { labels: bins, datasets: [{ label: "Invoices", data: bins.map((_, i) => R.filter((r) => binOf(r.confidence) === i).length), backgroundColor: [css("--crit"), css("--warn"), c1, css("--good"), css("--text-3")], ...bar }] }, options: base() });
-  $("#dt").innerHTML = `<thead><tr><th>#</th><th>${t("invNo")}</th><th>${t("invDate")}</th><th>${t("customer")}</th><th>${t("currency")}</th><th class="num">${t("amtSar")}</th><th class="num">${t("ledgerAmt")}</th><th class="num">${t("diff")}</th><th>${t("match")}</th><th>${t("diffStatus")}</th><th>${t("reviewStatus")}</th></tr></thead><tbody>${R.map((r) => `<tr class="click" data-id="${r.invoice_id}"><td>${r.sno}</td><td>${esc(r.invoice_number)}</td><td>${esc(r.invoice_date)}</td><td dir="auto">${esc(r.customer)}</td><td>${esc(r.currency)}</td><td class="num">${fmt(r.amount_sar)}</td><td class="num">${fmt(r.ledger_amount)}</td><td class="num">${fmt(r.difference)}</td><td>${statusBadge(r.match_status)}</td><td>${statusBadge(r.diff_status)}</td><td>${statusBadge(r.review_status)}</td></tr>`).join("")}
+  $("#dt").innerHTML = `<thead><tr><th>#</th><th>${t("invNo")}</th><th>${t("invDate")}</th><th>${t("customer")}</th><th>${t("currency")}</th><th class="num">${t("amtSar")}</th><th class="num">${t("ledgerAmt")}</th><th class="num">${t("diff")}</th><th>${t("match")}</th><th>${t("recon")}</th><th>${t("diffStatus")}</th><th>${t("reviewStatus")}</th></tr></thead><tbody>${R.map((r) => `<tr class="click" data-id="${r.invoice_id}"><td>${r.sno}</td><td>${esc(r.invoice_number)}</td><td>${esc(r.invoice_date)}</td><td dir="auto">${esc(r.customer)}</td><td>${esc(r.currency)}</td><td class="num">${fmt(r.amount_sar)}</td><td class="num">${fmt(r.ledger_amount)}</td><td class="num">${fmt(r.difference)}</td><td>${statusBadge(r.match_status)}${r.match_pass ? ` <span class="small muted">P${r.match_pass}</span>` : ""}</td><td>${statusBadge(r.recon_category)}</td><td>${statusBadge(r.diff_status)}</td><td>${statusBadge(r.review_status)}</td></tr>`).join("")}
     <tr><td></td><td colspan="4"><b>Total (${R.length})</b></td><td class="num"><b>${fmt(sum(R.map((r) => r.amount_sar)))}</b></td><td class="num"><b>${fmt(sum(R.map((r) => r.ledger_amount)))}</b></td><td class="num"><b>${fmt(sum(R.map((r) => r.difference)))}</b></td><td colspan="3"></td></tr></tbody>`;
   $$("#dt tr[data-id]").forEach((tr) => tr.addEventListener("click", () => (location.hash = `e/${S.eid}/review/${tr.dataset.id}`)));
 }
@@ -370,6 +377,24 @@ async function viewFindings(v) {
 }
 
 /* ----------------------------------------------------------------------------------- review view */
+function qrCard(row, F) {
+  const q = row.zatca_qr;
+  if (q === null || q === undefined) return `<div class="card"><h3>${t("qrTitle")}</h3><div class="small muted">${t("qrNotChecked")}</div></div>`;
+  if (!q.found) return `<div class="card"><h3>${t("qrTitle")}</h3>${statusBadge(t("qrNone"))}</div>`;
+  const v = (k) => (F[k] || {}).value;
+  const num = (a, b) => (a === null || a === undefined || b === null || b === undefined ? null : Math.abs(Math.abs(Number(a)) - Math.abs(Number(b))) <= 0.05);
+  const mark = (ok) => (ok === null ? "" : ok ? '<span class="badge b-good">✓</span>' : '<span class="badge b-crit">✕</span>');
+  const line = (lbl, qv, iv, ok) => `<span>${lbl}</span><b dir="auto">${esc(qv ?? "—")}</b><span class="small muted">${t("qrPerInvoice")}: ${esc(iv ?? "—")}</span><span>${mark(ok)}</span>`;
+  return `<div class="card"><h3>${t("qrTitle")}</h3><div>${statusBadge(q.tlv_valid ? "TLV valid" : "TLV invalid")} <span class="badge b-neutral">${t("qrPhase")} ${q.phase ?? "?"}</span> <span class="small muted">${t("page")} ${q.page}</span></div>
+    <div class="qrgrid small" style="margin-top:8px">
+      ${line(t("qrSeller"), q.seller_name, v("seller_name"), null)}
+      ${line(t("qrVat"), q.vat_registration, v("seller_vat"), v("seller_vat") ? String(v("seller_vat")) === q.vat_registration : null)}
+      ${line(t("qrTime"), q.timestamp, row.invoice_date, row.invoice_date && q.timestamp ? q.timestamp.slice(0, 10) === row.invoice_date : null)}
+      ${line(t("qrTotal"), fmt(q.invoice_total), fmt(v("gross_amount")), num(q.invoice_total, v("gross_amount")))}
+      ${line(t("qrVatTotal"), fmt(q.vat_total), fmt(v("vat_amount")), num(q.vat_total, v("vat_amount")))}</div>
+    ${(q.errors || []).concat(q.warnings || []).map((w) => `<div class="small muted" dir="auto">• ${esc(w)}</div>`).join("")}
+    ${q.phase === 2 ? `<div class="small muted">${t("qrSigNote")}</div>` : ""}</div>`;
+}
 async function viewReview(v) {
   if (!S.invoiceId) {
     v.innerHTML = `<div class="card"><h3>${t("select")}</h3><div class="table-wrap"><table class="t"><tbody>${S.rows.map((r) => `<tr class="click" data-id="${r.invoice_id}"><td>${r.sno}</td><td>${esc(r.invoice_number || r.file)}</td><td dir="auto">${esc(r.customer)}</td><td>${statusBadge(r.review_status)}</td></tr>`).join("")}</tbody></table></div></div>`;
@@ -394,7 +419,7 @@ async function viewReview(v) {
       <div class="grid">
         <div class="card"><div class="row"><h3>${t("fields")}</h3><span class="spacer"></span>${can ? `<button class="sm" id="cAll">${t("confirmAll")}</button>` : ""}</div>
           <div class="table-wrap" style="max-height:none"><table class="t fields"><thead><tr><th>${t("field")}</th><th>${t("value")}</th><th>${t("origin")}</th><th>${t("confidence")}</th><th>${t("page")}</th><th></th></tr></thead><tbody>
-          ${order.map((k) => { const f = F[k] || {}; const ai = AI[k] || {}; const low = f.value !== null && f.value !== undefined && f.confidence < 0.75 && !f.confirmed;
+          ${order.map((k) => { const f = F[k] || {}; const ai = AI[k] || {}; const low = f.value !== null && f.value !== undefined && f.confidence < lowConf() && !f.confirmed;
             return `<tr data-k="${k}"><td>${esc(fl(k))}</td><td class="${f.value === null || f.value === undefined ? (["invoice_number", "invoice_date", "buyer_name", "taxable_amount", "currency"].includes(k) ? "missing" : "") : low ? "lowconf" : ""}">
               <input data-k="${k}" value="${esc(f.value ?? "")}" dir="auto" ${can ? "" : "disabled"}>
               ${f.method === "auditor" && ai.value !== f.value ? `<div class="small muted">AI: ${esc(ai.value ?? "—")} → ${esc(f.edited_by)}</div>` : ""}
@@ -405,6 +430,7 @@ async function viewReview(v) {
           </tbody></table></div>
           ${(inv.line_items || []).length ? `<h4>${t("lineItems")} (${inv.line_items.length})</h4><div class="table-wrap" style="max-height:180px"><table class="t"><tbody>${inv.line_items.map((li) => `<tr><td dir="auto">${esc(li.description)}</td><td class="num">${esc(li.quantity ?? "")}</td><td class="num">${fmt(li.unit_price)}</td><td class="num">${fmt(li.amount)}</td></tr>`).join("")}</tbody></table></div>` : ""}
         </div>
+        ${qrCard(row, F)}
         <div class="card"><h3>${t("calculations")}</h3><div class="calc">
           <span>E · ${t("amountExVat")}</span><b class="num">${fmt(row.invoice_amount)} ${esc(row.currency || "")}</b>
           <span>I · ${t("fx")}</span><b class="num">${row.exchange_rate ?? "—"} ${inv.fx_override ? '<span class="badge b-aud">override</span>' : ""}</b>

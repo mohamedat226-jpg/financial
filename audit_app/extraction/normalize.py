@@ -169,3 +169,70 @@ def norm_party(v) -> str:
 def valid_saudi_vat(v: str | None) -> bool:
     """ZATCA VAT registration numbers are 15 digits, beginning and ending with 3."""
     return bool(v) and bool(re.fullmatch(r"3\d{13}3", str(v)))
+
+
+# ------------------------------------------------------------------------- reconciliation helpers
+def clean_exact(v) -> str:
+    """Pass 1 key: exact alphanumeric reference (case and surrounding whitespace ignored only)."""
+    if v in (None, ""):
+        return ""
+    s = unicodedata.normalize("NFKC", str(v)).translate(ARABIC_DIGITS).strip().upper()
+    return s[:-2] if re.fullmatch(r"\d+\.0", s) else s
+
+
+_DOC_PREFIX = re.compile(r"^(?:TAX\s*[-_/]?\s*INV(?:OICE)?|INV(?:OICE)?|TAX|NO\.?|#)+\s*[-_/:#.]*\s*")
+
+
+def norm_doc_no(v) -> str:
+    """Pass 2 key: strip common prefixes (INV-, TAX-, #), punctuation and leading zeros of each numeric group.
+    'INV-2025-0018', 'INV2025-0018', '#2025/18' -> '2025-18'. Other prefixes (e.g. CN-) are kept, so a credit
+    note and an invoice with the same digits do not collide."""
+    if v in (None, ""):
+        return ""
+    s = clean_exact(v)
+    prev = None
+    while prev != s:
+        prev, s = s, _DOC_PREFIX.sub("", s)
+    groups = re.findall(r"[A-Z]+|\d+", s)
+    if not groups:
+        return ""
+    return "-".join(g.lstrip("0") or "0" if g.isdigit() else g for g in groups)
+
+
+def levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if len(a) < len(b):
+        a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def levenshtein_ratio(a, b) -> float:
+    """1 - edit distance / longer length, on normalised party names (legal suffixes removed)."""
+    na, nb = norm_party(a), norm_party(b)
+    if not na or not nb:
+        return 0.0
+    return round(1 - levenshtein(na, nb) / max(len(na), len(nb)), 3)
+
+
+# KSA weekend is Friday and Saturday (Python weekday 4 and 5). Configurable for other jurisdictions.
+WEEKEND = (4, 5)
+
+
+def business_days_between(d1: date, d2: date, weekend=WEEKEND) -> int:
+    """Absolute number of business days between two dates (0 when the same day)."""
+    if d1 > d2:
+        d1, d2 = d2, d1
+    n, cur = 0, d1
+    from datetime import timedelta
+    while cur < d2:
+        cur += timedelta(days=1)
+        if cur.weekday() not in weekend:
+            n += 1
+    return n
