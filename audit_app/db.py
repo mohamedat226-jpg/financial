@@ -185,6 +185,10 @@ def init() -> None:
     cols = {r[1] for r in c.execute("PRAGMA table_info(invoices)")}
     if "zatca_qr" not in cols:
         c.execute("ALTER TABLE invoices ADD COLUMN zatca_qr TEXT")
+    fcols = {r[1] for r in c.execute("PRAGMA table_info(findings)")}
+    for col in ("observation_ar", "reason_ar", "procedure_ar"):   # Arabic wording stored next to the English record
+        if col not in fcols:
+            c.execute(f"ALTER TABLE findings ADD COLUMN {col} TEXT")
     c.commit()
     c.close()
 

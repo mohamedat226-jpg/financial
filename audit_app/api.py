@@ -384,8 +384,19 @@ def rows(eid: int, user=Depends(current_user)):
     return {"rows": engine.attach_risk(eid, engine.compute_rows(eid)), "summary": engine.summary(eid), "progress": _progress(eid)}
 
 
+def _ensure_arabic_findings(eid: int) -> None:
+    """Engagements created before the Arabic wording existed get it filled in once, by re-running the checks
+    (the checks are deterministic, so only the new Arabic columns change; review status and notes are kept)."""
+    eng = db.q1("SELECT status FROM engagements WHERE id=?", (eid,))
+    if eng and eng["status"] == "finalized":
+        return   # a finalised working paper is never recomputed; its findings stay as signed off (English only)
+    if db.q1("SELECT 1 FROM findings WHERE engagement_id=? AND active=1 AND observation_ar IS NULL LIMIT 1", (eid,)):
+        engine.run_checks(eid)
+
+
 @app.get("/api/engagements/{eid}/findings")
 def findings(eid: int, include_resolved: bool = False, user=Depends(current_user)):
+    _ensure_arabic_findings(eid)
     sql = "SELECT * FROM findings WHERE engagement_id=?" + ("" if include_resolved else " AND active=1")
     return db.q(sql + " ORDER BY CASE risk WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, id", (eid,))
 
@@ -443,6 +454,7 @@ def add_alias(eid: int, body: AliasIn, user=Depends(require("edit"))):
 def invoice_detail(iid: int, user=Depends(current_user)):
     i = _inv(iid)
     eid = i["engagement_id"]
+    _ensure_arabic_findings(eid)
     inv = next(x for x in engine.load_invoices(eid) if x["id"] == iid)
     row = next((r for r in engine.compute_rows(eid) if r["invoice_id"] == iid), None)
     m = inv["match"] or {}

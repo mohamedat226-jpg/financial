@@ -4,12 +4,14 @@
 every report, so all outputs reconcile to the same underlying data."""
 from __future__ import annotations
 
+import re
 import statistics
 from datetime import date
 from difflib import SequenceMatcher
 
 from . import db
 from . import config
+from .findings_ar import DOC_TYPE_AR, FIELD_AR, PROC_AR, STATIC_AR, money
 from .extraction import zatca_qr
 from .extraction.normalize import (HIJRI_NOTE, business_days_between, clean_exact, has_arabic, levenshtein_ratio, norm_doc_no,
                                  norm_invoice_no, norm_party, to_date, valid_saudi_vat)
@@ -304,6 +306,7 @@ def compute_rows(eid: int) -> list[dict]:
             "ledger_customer": le["customer"] if le else None,
             "auditor_confirmed": all(((inv["fields"] or {}).get(k) or {}).get("confirmed") for k in REQUIRED),
             "suggestion": suggest_explanation(inv, D, J, K, tol),
+            "suggestion_ar": suggest_explanation(inv, D, J, K, tol, "ar"),
         })
     return rows
 
@@ -378,30 +381,38 @@ def unmatched_ledger_rows(eid: int, invs: list[dict] | None = None, ledger: list
     return [le for le in ledger if le["id"] not in linked and le["id"] not in cand]
 
 
-def suggest_explanation(inv, D, J, K, tol) -> str | None:
-    """AI-assisted (rule-based) hypotheses for a difference. Requires auditor confirmation before
-    it is written to the working paper (column P)."""
+def suggest_explanation(inv, D, J, K, tol, lang: str = "en") -> str | None:
+    """AI-assisted (rule-based) hypotheses for a difference, in English or Arabic. Requires auditor confirmation
+    before it is written to the working paper (column P)."""
     if K is None or abs(K) <= tol:
         return None
-    hints = []
+    hints: list[tuple[str, str]] = []
     vat, gross, E, disc = (fv(inv, k) for k in ("vat_amount", "gross_amount", "taxable_amount", "discount"))
     rate = None
     if J and E:
         rate = J / float(E)
     if vat is not None and rate and abs(K - float(vat) * rate) <= tol:
-        hints.append("Ledger amount appears to include VAT (difference equals the VAT amount); sales should be recorded net of VAT")
+        hints.append(("Ledger amount appears to include VAT (difference equals the VAT amount); sales should be recorded net of VAT",
+                      "يبدو أن مبلغ الدفتر يشمل ضريبة القيمة المضافة (الفرق يساوي مبلغ الضريبة)؛ والمبيعات تُسجَّل صافية من الضريبة"))
     if gross is not None and rate and abs(D - float(gross) * rate) <= tol and not hints:
-        hints.append("Ledger amount equals the VAT-inclusive invoice total")
+        hints.append(("Ledger amount equals the VAT-inclusive invoice total", "مبلغ الدفتر يساوي إجمالي الفاتورة شاملًا الضريبة"))
     if disc and rate and abs(abs(K) - float(disc) * rate) <= tol:
-        hints.append("Difference equals the invoice discount - discount may be recorded separately or not recorded")
+        hints.append(("Difference equals the invoice discount - discount may be recorded separately or not recorded",
+                      "الفرق يساوي خصم الفاتورة - قد يكون الخصم مسجلًا بشكل منفصل أو غير مسجل"))
     if E is not None and D is not None and abs(D - float(E)) <= tol and rate and rate != 1:
-        hints.append("Ledger appears to record the foreign-currency amount without translation to SAR")
+        hints.append(("Ledger appears to record the foreign-currency amount without translation to SAR",
+                      "يبدو أن الدفتر سجّل المبلغ بالعملة الأجنبية دون تحويله إلى الريال"))
     if rate and rate != 1 and not hints:
-        hints.append("Possible exchange-rate difference (ledger may use the transaction-date rate); "
-                     f"implied ledger rate {D / float(E):.4f}" if E else "Possible exchange-rate difference")
+        if E:
+            hints.append(("Possible exchange-rate difference (ledger may use the transaction-date rate); "
+                          f"implied ledger rate {D / float(E):.4f}",
+                          f"فرق محتمل في سعر الصرف (قد يستخدم الدفتر سعر تاريخ العملية)؛ السعر الضمني في الدفتر {D / float(E):.4f}"))
+        else:
+            hints.append(("Possible exchange-rate difference", "فرق محتمل في سعر الصرف"))
     if not hints:
-        hints.append(f"Unexplained difference of SAR {K:,.2f} - obtain explanation and supporting adjustment from client")
-    return "; ".join(hints)
+        hints.append((f"Unexplained difference of SAR {K:,.2f} - obtain explanation and supporting adjustment from client",
+                      f"فرق غير مفسَّر قدره {K:,.2f} ريال - احصل من العميل على التفسير والتسوية المؤيدة"))
+    return ("؛ " if lang == "ar" else "; ").join(h[1] if lang == "ar" else h[0] for h in hints)
 
 
 # ------------------------------------------------------------------------------------- audit checks
@@ -445,8 +456,11 @@ PROC = {
 }
 
 
-def _f(code, risk, obs, reason, doc, **kw):
-    return {"code": code, "risk": risk, "observation": obs, "reason": reason, "document": doc, "procedure": PROC[code], **kw}
+def _f(code, risk, obs, reason, doc, ar=None, **kw):
+    """A finding in English (record of reference) with its Arabic wording stored alongside for the Arabic UI."""
+    obs_ar, reason_ar = ar or STATIC_AR.get(code, (None, None))
+    return {"code": code, "risk": risk, "observation": obs, "reason": reason, "document": doc, "procedure": PROC[code],
+            "observation_ar": obs_ar, "reason_ar": reason_ar, "procedure_ar": PROC_AR.get(code), **kw}
 
 
 def run_checks(eid: int, low_conf: float | None = None) -> list[dict]:
@@ -497,52 +511,73 @@ def run_checks(eid: int, low_conf: float | None = None) -> list[dict]:
                    "SAR translation cannot be performed without the currency", doc))
         elif r["exchange_rate"] is None:
             add(_f("FX_MISSING", "Medium", f"No authorised exchange rate entered for {r['currency']}",
-                   "Amount in SAR and difference cannot be calculated", doc))
+                   "Amount in SAR and difference cannot be calculated", doc,
+                   ar=(f"لم يُدخل سعر صرف معتمد للعملة {r['currency']}", "لا يمكن حساب المبلغ بالريال ولا الفرق")))
         T, V, G, rate = (fv(inv, k) for k in ("taxable_amount", "vat_amount", "gross_amount", "vat_rate"))
         if T is not None and V is not None and rate is not None:
             exp = round(float(T) * float(rate) / 100, 2)
             if abs(exp - float(V)) > 0.05:
                 add(_f("VAT_RECALC", "Medium", f"VAT recalculation difference: invoice {float(V):,.2f} vs recalculated {exp:,.2f}",
-                       f"VAT at {rate}% on {float(T):,.2f}", p("vat_amount")))
+                       f"VAT at {rate}% on {float(T):,.2f}", p("vat_amount"),
+                       ar=(f"فرق في إعادة احتساب الضريبة: في الفاتورة {money(V)} مقابل {money(exp)} بعد إعادة الاحتساب",
+                           f"ضريبة بنسبة {rate}% على {money(T)}")))
         if T is not None and V is not None and G is not None and abs(float(T) + float(V) - float(G)) > 0.05:
             add(_f("VAT_ARITHMETIC_ERROR", "Medium", f"Invoice arithmetic error: {float(T):,.2f} + {float(V):,.2f} ≠ {float(G):,.2f}",
-                   "Taxable amount plus VAT does not equal invoice total", p("gross_amount")))
+                   "Taxable amount plus VAT does not equal invoice total", p("gross_amount"),
+                   ar=(f"خطأ حسابي في الفاتورة: {money(T)} + {money(V)} ≠ {money(G)}",
+                       "المبلغ الخاضع للضريبة مضافًا إليه الضريبة لا يساوي إجمالي الفاتورة")))
         items = inv["line_items"] or []
         if T is not None and items and all(it.get("amount") is not None for it in items):
             s = round(sum(float(it["amount"]) for it in items) - float(fv(inv, "discount") or 0), 2)
             if abs(s - float(T)) > 0.05:
                 add(_f("LINE_SUM", "Low", f"Line items total {s:,.2f} differs from taxable amount {float(T):,.2f}",
-                       "Line-item extraction may be incomplete or invoice arithmetic is incorrect", p("taxable_amount")))
+                       "Line-item extraction may be incomplete or invoice arithmetic is incorrect", p("taxable_amount"),
+                       ar=(f"مجموع بنود الفاتورة {money(s)} يختلف عن المبلغ الخاضع للضريبة {money(T)}",
+                           "قد يكون استخراج البنود ناقصًا، أو في حساب الفاتورة خطأ")))
         if rate is not None and float(rate) not in (0.0, 15.0) and r["currency"] in ("SAR", None):
             add(_f("VAT_RATE", "Medium", f"VAT rate of {rate}% is not the KSA standard (15%) or zero rate",
-                   "Unusual rate for a Saudi supply", p("vat_rate")))
+                   "Unusual rate for a Saudi supply", p("vat_rate"),
+                   ar=(f"نسبة الضريبة {rate}% ليست النسبة الأساسية في المملكة (15%) ولا نسبة الصفر", "نسبة غير معتادة لتوريد داخل المملكة")))
         sv, bv = fv(inv, "seller_vat"), fv(inv, "buyer_vat")
         if inv["doc_type"] in ("tax_invoice", "simplified_tax_invoice") and not sv:
-            add(_f("SELLER_VAT", "Medium", "Seller VAT number not shown on tax invoice", "A tax invoice must show the supplier VAT number", doc))
+            add(_f("SELLER_VAT", "Medium", "Seller VAT number not shown on tax invoice", "A tax invoice must show the supplier VAT number", doc,
+                   ar=("الرقم الضريبي للبائع غير ظاهر في الفاتورة الضريبية", "يجب أن تُظهر الفاتورة الضريبية الرقم الضريبي للمورد")))
         elif sv and not valid_saudi_vat(sv):
-            add(_f("SELLER_VAT", "Low", f"Seller VAT number {sv} does not follow the 15-digit format (3…3)", "Format check", p("seller_vat")))
+            add(_f("SELLER_VAT", "Low", f"Seller VAT number {sv} does not follow the 15-digit format (3…3)", "Format check", p("seller_vat"),
+                   ar=(f"الرقم الضريبي للبائع {sv} لا يطابق صيغة الخمسة عشر رقمًا (يبدأ وينتهي بالرقم 3)", "فحص الصيغة")))
         if bv and not valid_saudi_vat(bv):
-            add(_f("BUYER_VAT", "Low", f"Buyer VAT number {bv} does not follow the 15-digit format (3…3)", "Format check", p("buyer_vat")))
+            add(_f("BUYER_VAT", "Low", f"Buyer VAT number {bv} does not follow the 15-digit format (3…3)", "Format check", p("buyer_vat"),
+                   ar=(f"الرقم الضريبي للمشتري {bv} لا يطابق صيغة الخمسة عشر رقمًا (يبدأ وينتهي بالرقم 3)", "فحص الصيغة")))
         dn = (F.get("invoice_date") or {}).get("note") or ""
         if dn.startswith(HIJRI_NOTE) and not (F.get("invoice_date") or {}).get("confirmed") \
                 and (F.get("invoice_date") or {}).get("method") != "auditor":
-            add(_f("HIJRI_DATE", "Low", dn, "Invoice dated in the Hijri calendar; Gregorian date derived by conversion", p("invoice_date")))
+            hm = re.search(r"(\d{2}/\d{2}/\d{4}) AH converted to (\S+)", dn)
+            add(_f("HIJRI_DATE", "Low", dn, "Invoice dated in the Hijri calendar; Gregorian date derived by conversion", p("invoice_date"),
+                   ar=((f"التاريخ الهجري {hm.group(1)} هـ حُوِّل إلى {hm.group(2)} (تقويم أم القرى) - يتطلب تأكيد المراجع" if hm else None),
+                       "الفاتورة مؤرخة بالتقويم الهجري، والتاريخ الميلادي مستنتج بالتحويل")))
         for qf in _qr_checks(inv, r, doc):
             add(qf)
         if inv["doc_type"] in ("proforma", "quotation"):
-            add(_f("DOC_TYPE", "High", f"Document is a {inv['doc_type']}, not a tax invoice", "Not valid evidence of a sale", doc))
+            add(_f("DOC_TYPE", "High", f"Document is a {inv['doc_type']}, not a tax invoice", "Not valid evidence of a sale", doc,
+                   ar=(f"المستند {DOC_TYPE_AR.get(inv['doc_type'], inv['doc_type'])} وليس فاتورة ضريبية", "ليس دليلًا صالحًا على حدوث البيع")))
         if inv["doc_type"] == "credit_note":
             add(_f("CREDIT_NOTE", "Medium", "Credit note included in the sales population"
                    + (f" (original invoice {fv(inv, 'credit_note_ref')})" if fv(inv, "credit_note_ref") else ""),
-                   "Credit notes reduce revenue and require separate testing", doc))
+                   "Credit notes reduce revenue and require separate testing", doc,
+                   ar=("إشعار دائن ضمن مجتمع المبيعات"
+                       + (f" (الفاتورة الأصلية {fv(inv, 'credit_note_ref')})" if fv(inv, "credit_note_ref") else ""),
+                       "الإشعارات الدائنة تخفّض الإيراد وتتطلب اختبارًا مستقلًا")))
         if r["match_status"] == "Duplicate Invoice" and r["invoice_number"]:
             dupe_docs = [x for x in rows if x["invoice_number"] and norm_invoice_no(x["invoice_number"]) == norm_invoice_no(r["invoice_number"])]
             if len(dupe_docs) > 1:
                 add(_f("DUP_INV_NO", "High", f"Invoice number {r['invoice_number']} appears on {len(dupe_docs)} documents: "
-                       + ", ".join(x["file"] for x in dupe_docs), "Duplicate invoice numbers indicate double billing or sequence error", doc))
+                       + ", ".join(x["file"] for x in dupe_docs), "Duplicate invoice numbers indicate double billing or sequence error", doc,
+                       ar=(f"رقم الفاتورة {r['invoice_number']} ظاهر في {len(dupe_docs)} مستندات: " + "، ".join(x["file"] for x in dupe_docs),
+                           "تكرار رقم الفاتورة يشير إلى فوترة مزدوجة أو خطأ في التسلسل")))
             else:
                 add(_f("LEDGER_DUP", "High", f"Invoice {r['invoice_number']} recorded more than once in the sales ledger",
-                       "Possible duplicate revenue recording", doc))
+                       "Possible duplicate revenue recording", doc,
+                       ar=(f"الفاتورة {r['invoice_number']} مسجلة أكثر من مرة في دفتر المبيعات", "احتمال تسجيل الإيراد مرتين")))
         if len(by_hash.get(inv["sha256"], [])) > 1:
             add(_f("DUP_FILE", "High", "Identical PDF file uploaded more than once", "Same file hash", doc))
         if r["customer"] and r["invoice_date"] and r["invoice_amount"] is not None:
@@ -558,34 +593,48 @@ def run_checks(eid: int, low_conf: float | None = None) -> list[dict]:
                    "Ambiguous match requires auditor confirmation", doc))
         elif ms == "Customer Mismatch":
             add(_f("CUSTOMER_MISMATCH", "Medium", f"Customer per invoice '{r['customer']}' differs from ledger '{r['ledger_customer']}'",
-                   "Revenue may be recorded against the wrong customer", doc))
+                   "Revenue may be recorded against the wrong customer", doc,
+                   ar=(f"العميل في الفاتورة «{r['customer']}» يختلف عن العميل في الدفتر «{r['ledger_customer']}»",
+                       "قد يكون الإيراد مسجلًا على عميل خاطئ")))
         if r["diff_status"] == "Difference Identified":
             risk = "High" if (mat is not None and abs(r["difference"]) >= mat) or mat is None and abs(r["difference"]) > 1000 else "Medium"
             add(_f("AMOUNT_DIFF", risk, f"Difference of SAR {r['difference']:,.2f} between ledger ({r['ledger_amount']:,.2f}) and invoice ({r['amount_sar']:,.2f})",
-                   f"Absolute difference exceeds tolerance of SAR {tol:,.2f}", doc, suggestion=r["suggestion"]))
+                   f"Absolute difference exceeds tolerance of SAR {tol:,.2f}", doc, suggestion=r["suggestion"],
+                   ar=(f"فرق قدره {money(r['difference'])} ريال بين الدفتر ({money(r['ledger_amount'])}) والفاتورة ({money(r['amount_sar'])})",
+                       f"الفرق المطلق يتجاوز حد التسامح البالغ {money(tol)} ريال")))
         low = [k for k in REQUIRED + ["vat_amount", "gross_amount"]
                if (F.get(k) or {}).get("value") is not None and (F.get(k) or {}).get("confidence", 0) < low_conf
                and not (F.get(k) or {}).get("confirmed")]
         if low and inv["status"] != "needs_manual":
             add(_f("LOW_CONFIDENCE", "Medium", "Low-confidence extraction for: " + ", ".join(low),
-                   "Values may be misread; auditor confirmation required", doc))
+                   "Values may be misread; auditor confirmation required", doc,
+                   ar=("درجة ثقة منخفضة في استخراج: " + "، ".join(FIELD_AR.get(k, k) for k in low),
+                       "قد تكون القيم مقروءة خطأً؛ يلزم تأكيد المراجع")))
         if q3 is not None and r["amount_sar"] is not None and r["amount_sar"] > q3 + 3 * iqr and r["amount_sar"] > 3 * med:
             add(_f("UNUSUAL_AMOUNT", "Low", f"Invoice amount SAR {r['amount_sar']:,.2f} is unusually large (median SAR {med:,.2f})",
-                   "Statistical outlier (> Q3 + 3×IQR)", doc))
+                   "Statistical outlier (> Q3 + 3×IQR)", doc,
+                   ar=(f"مبلغ الفاتورة {money(r['amount_sar'])} ريال كبير على نحو غير معتاد (الوسيط {money(med)} ريال)",
+                       "قيمة شاذة إحصائيًا (أكبر من الربيع الثالث + 3 × المدى الربيعي)")))
         d = to_date(r["invoice_date"])
         man = r["manual"]
         gdn = to_date(man.get("gdn_date"))
         if d and not (fy_start <= d <= fy_end):
             add(_f("DATE_OUTSIDE_FY", "High", f"Invoice dated {d.isoformat()} is outside FY {eng['financial_year']} ({fy_start} to {fy_end})",
-                   "Period / cut-off", p("invoice_date")))
+                   "Period / cut-off", p("invoice_date"),
+                   ar=(f"تاريخ الفاتورة {d.isoformat()} خارج السنة المالية {eng['financial_year']} (من {fy_start} إلى {fy_end})",
+                       "الفترة والقطع")))
         if d:
             near = abs((d - fy_end).days) <= int(eng["cutoff_days"])
             if gdn and ((d <= fy_end) != (gdn <= fy_end)):
                 add(_f("CUTOFF_ERROR", "High", f"Invoice dated {d} but goods delivered {gdn} - different financial periods",
-                       "Revenue recognised in a different period from delivery", doc))
+                       "Revenue recognised in a different period from delivery", doc,
+                       ar=(f"الفاتورة بتاريخ {d} والبضاعة سُلِّمت في {gdn} - فترتان ماليتان مختلفتان",
+                           "أُثبت الإيراد في فترة غير فترة التسليم")))
             elif near and not gdn:
                 add(_f("CUTOFF_RISK", "Medium", f"Invoice dated {d} is within {eng['cutoff_days']} days of year end; delivery date not yet evidenced",
-                       "Cut-off cannot be concluded without delivery evidence", doc))
+                       "Cut-off cannot be concluded without delivery evidence", doc,
+                       ar=(f"الفاتورة بتاريخ {d} تقع ضمن {eng['cutoff_days']} يومًا من نهاية السنة، ولم يُوثَّق تاريخ التسليم بعد",
+                           "لا يمكن الحكم على القطع دون دليل على التسليم")))
         if str(man.get("gdn_issued", "")).lower() in ("no", "n", "false"):
             add(_f("NO_GDN", "High", "Auditor recorded that no goods delivery note was issued", "Missing supporting document", doc))
         if str(man.get("invoice_approved", "")).lower() in ("no", "n", "false"):
@@ -598,7 +647,10 @@ def run_checks(eid: int, low_conf: float | None = None) -> list[dict]:
         out.append({**_f("LEDGER_NO_INVOICE", "High" if (le["amount"] or 0) >= (mat or 0) and mat else "Medium",
                          f"Ledger row {le['row_number']} ({le['invoice_number'] or 'no invoice no.'}, {le['customer'] or '-'}, "
                          f"{(le['amount'] or 0):,.2f}) has no supporting invoice in the uploaded population",
-                         "Recorded sale not vouched to an invoice", f"Sales ledger row {le['row_number']}"), "ledger_id": le["id"]})
+                         "Recorded sale not vouched to an invoice", f"Sales ledger row {le['row_number']}",
+                         ar=(f"القيد رقم {le['row_number']} في الدفتر ({le['invoice_number'] or 'بلا رقم فاتورة'}، {le['customer'] or '-'}، "
+                             f"{money(le['amount'] or 0)}) ليس له فاتورة مؤيدة ضمن الفواتير المرفوعة",
+                             "مبيعات مسجلة غير مؤيدة بفاتورة")), "ledger_id": le["id"]})
     _store_findings(eid, out)
     return out
 
@@ -618,23 +670,31 @@ def _qr_checks(inv, r, doc) -> list[dict]:
     loc = f"{doc} p.{q.get('page')} (QR)"
     if not d.get("tlv_valid"):
         out.append(_f("ZATCA_QR_INVALID", "Medium", "QR code is not a valid ZATCA TLV: " + "; ".join(d.get("errors", [])),
-                      "Structure / mandatory tags 1-5 check", loc))
+                      "Structure / mandatory tags 1-5 check", loc,
+                      ar=("رمز QR ليس بصيغة TLV صالحة حسب متطلبات ZATCA: " + "؛ ".join(d.get("errors", [])),
+                          "فحص البنية والوسوم الإلزامية من 1 إلى 5")))
         return out
-    diffs = []
+    diffs, diffs_ar = [], []
     sv = fv(inv, "seller_vat")
     if sv and d.get("vat_registration") and str(sv) != d["vat_registration"]:
         diffs.append(f"seller VAT {sv} vs QR {d['vat_registration']}")
+        diffs_ar.append(f"الرقم الضريبي للبائع {sv} مقابل {d['vat_registration']} في الرمز")
     G, V = fv(inv, "gross_amount"), fv(inv, "vat_amount")
     if G is not None and d.get("invoice_total") is not None and abs(abs(float(G)) - abs(d["invoice_total"])) > 0.05:
         diffs.append(f"total incl. VAT {float(G):,.2f} vs QR {d['invoice_total']:,.2f}")
+        diffs_ar.append(f"الإجمالي شامل الضريبة {money(G)} مقابل {money(d['invoice_total'])} في الرمز")
     if V is not None and d.get("vat_total") is not None and abs(abs(float(V)) - abs(d["vat_total"])) > 0.05:
         diffs.append(f"VAT {float(V):,.2f} vs QR {d['vat_total']:,.2f}")
+        diffs_ar.append(f"الضريبة {money(V)} مقابل {money(d['vat_total'])} في الرمز")
     qd, idt = zatca_qr.qr_date(d), to_date(r["invoice_date"])
     if qd and idt and qd != idt:
         diffs.append(f"invoice date {idt} vs QR timestamp {d.get('timestamp')}")
+        diffs_ar.append(f"تاريخ الفاتورة {idt} مقابل الطابع الزمني {d.get('timestamp')} في الرمز")
     if diffs:
         out.append(_f("ZATCA_QR_MISMATCH", "High", "Printed invoice disagrees with its ZATCA QR: " + "; ".join(diffs),
-                      "QR data is generated by the e-invoicing solution; differences may indicate an altered document", loc))
+                      "QR data is generated by the e-invoicing solution; differences may indicate an altered document", loc,
+                      ar=("الفاتورة المطبوعة تخالف بيانات رمز QR: " + "؛ ".join(diffs_ar),
+                          "بيانات رمز QR يولّدها نظام الفوترة الإلكترونية؛ والاختلاف قد يشير إلى مستند معدَّل")))
     return out
 
 
@@ -646,12 +706,15 @@ def _store_findings(eid: int, found: list[dict]) -> None:
             key = (f.get("invoice_id"), f.get("ledger_id"), f["code"])
             seen.add(key)
             if key in existing:
-                c.execute("UPDATE findings SET observation=?, risk=?, reason=?, document=?, procedure=?, active=1 WHERE id=?",
-                          (f["observation"], f["risk"], f["reason"], f["document"], f["procedure"], existing[key]["id"]))
+                c.execute("UPDATE findings SET observation=?, risk=?, reason=?, document=?, procedure=?, observation_ar=?, reason_ar=?, "
+                          "procedure_ar=?, active=1 WHERE id=?",
+                          (f["observation"], f["risk"], f["reason"], f["document"], f["procedure"], f.get("observation_ar"),
+                           f.get("reason_ar"), f.get("procedure_ar"), existing[key]["id"]))
             else:
-                c.execute("INSERT INTO findings(engagement_id,invoice_id,ledger_id,code,observation,risk,reason,document,procedure,created_at) "
-                          "VALUES (?,?,?,?,?,?,?,?,?,?)", (eid, f.get("invoice_id"), f.get("ledger_id"), f["code"], f["observation"],
-                                                         f["risk"], f["reason"], f["document"], f["procedure"], db.now()))
+                c.execute("INSERT INTO findings(engagement_id,invoice_id,ledger_id,code,observation,risk,reason,document,procedure,"
+                          "observation_ar,reason_ar,procedure_ar,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                          (eid, f.get("invoice_id"), f.get("ledger_id"), f["code"], f["observation"], f["risk"], f["reason"],
+                           f["document"], f["procedure"], f.get("observation_ar"), f.get("reason_ar"), f.get("procedure_ar"), db.now()))
         for key, f in existing.items():
             if key not in seen and f["active"]:
                 c.execute("UPDATE findings SET active=0 WHERE id=?", (f["id"],))
