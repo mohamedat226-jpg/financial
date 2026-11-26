@@ -6,7 +6,7 @@ import re
 
 from .. import config
 from . import llm, rules, zatca_qr
-from .normalize import norm_text, parse_amount, to_date
+from .normalize import HIJRI_NOTE, norm_text, parse_amount, parse_date, to_date
 from .pdf_text import DocText, read_pdf
 
 FIELDS = ["seller_name", "seller_vat", "buyer_name", "buyer_vat", "invoice_number", "invoice_date", "currency",
@@ -51,18 +51,22 @@ def _ai_to_fields(ai: llm.InvoiceExtraction, doc: DocText | None) -> dict:
     out = {}
     for k in FIELDS:
         ev: llm.Evidence = getattr(ai, k)
-        val = ev.value
+        val, dnote = ev.value, None
         if val is not None:
             if k in NUMERIC:
                 val = parse_amount(val)
             elif k == "invoice_date":
-                d = to_date(val)
+                d, _, dnote = parse_date(str(val))
+                if d is None:
+                    d = to_date(val)
                 val = d.isoformat() if d else None
             elif k == "currency":
                 val = val.strip().upper()[:3]
         bbox, page = _locate(doc, ev.source_text, ev.page)
         out[k] = {"value": val, "confidence": round(float(ev.confidence) if val is not None else 0.0, 3), "page": page,
                   "bbox": bbox, "source_text": ev.source_text, "method": "ai", "note": None}
+        if k == "invoice_date" and val is not None and dnote and dnote.startswith(HIJRI_NOTE):
+            out[k].update(confidence=min(out[k]["confidence"], 0.6), note=dnote)
     return out
 
 

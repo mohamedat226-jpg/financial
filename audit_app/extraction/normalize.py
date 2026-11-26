@@ -96,11 +96,11 @@ def parse_date(text: str) -> tuple[date | None, str | None, str | None]:
         return None, None, None
     t = norm_text(text)
     # ISO yyyy-mm-dd
-    m = re.search(r"\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b", t)
+    m = re.search(r"\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)", t)
     if m:
         y, mo, d = map(int, m.groups())
         return _mk(y, mo, d, m.group(0), None)
-    m = re.search(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b", t)
+    m = re.search(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?!\d)", t)   # (?!\d) also accepts a trailing "H" / "هـ"
     if m:
         a, b, y = map(int, m.groups())
         note = None
@@ -119,12 +119,43 @@ def parse_date(text: str) -> tuple[date | None, str | None, str | None]:
         m = re.search(rf"(\d{{1,2}})\s+{name}\s+(\d{{4}})", t)
         if m:
             return _mk(int(m.group(2)), mo, int(m.group(1)), m.group(0), None)
+    for name, mo in HIJRI_MONTHS:
+        m = re.search(rf"(\d{{1,2}})\s+{name}\s+(1[345]\d\d)", t)
+        if m:
+            return _mk(int(m.group(2)), mo, int(m.group(1)), m.group(0), None)
     return None, None, None
+
+
+# Hijri month names after norm_text (alef / ya / ta-marbuta unified). Longer names first so that
+# "ربيع الاول" is not matched as a bare "ربيع".
+HIJRI_MONTHS = sorted({
+    "محرم": 1, "صفر": 2, "ربيع الاول": 3, "ربيع الثاني": 4, "ربيع الاخر": 4, "جمادي الاولي": 5, "جمادي الاول": 5,
+    "جمادي الثانيه": 6, "جمادي الاخره": 6, "جمادي الاخر": 6, "رجب": 7, "شعبان": 8, "رمضان": 9, "شوال": 10,
+    "ذو القعده": 11, "ذي القعده": 11, "ذو الحجه": 12, "ذي الحجه": 12}.items(), key=lambda kv: -len(kv[0]))
+HIJRI_NOTE = "Hijri date"
+
+
+def hijri_to_gregorian(y: int, mo: int, d: int) -> date | None:
+    """Umm al-Qura conversion (official Saudi calendar). Returns None if unavailable or not a valid Hijri date."""
+    try:
+        from hijridate import Hijri
+    except ImportError:
+        return None
+    try:
+        g = Hijri(y, mo, d).to_gregorian()
+    except (ValueError, OverflowError):
+        return None
+    return date(g.year, g.month, g.day)
 
 
 def _mk(y, mo, d, raw, note):
     if 1300 <= y <= 1500:
-        return None, raw, "Hijri date detected - Gregorian conversion requires auditor confirmation"
+        g = hijri_to_gregorian(y, mo, d)
+        if g is None:
+            return None, raw, ("Hijri date detected - could not be converted (invalid date or converter not installed); "
+                               "enter the Gregorian date manually")
+        return g, raw, (f"{HIJRI_NOTE} {d:02d}/{mo:02d}/{y} AH converted to {g.isoformat()} (Umm al-Qura calendar) - "
+                        "auditor confirmation required")
     try:
         return date(y, mo, d), raw, note
     except ValueError:

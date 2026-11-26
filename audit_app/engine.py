@@ -11,7 +11,7 @@ from difflib import SequenceMatcher
 from . import db
 from . import config
 from .extraction import zatca_qr
-from .extraction.normalize import (business_days_between, clean_exact, has_arabic, levenshtein_ratio, norm_doc_no,
+from .extraction.normalize import (HIJRI_NOTE, business_days_between, clean_exact, has_arabic, levenshtein_ratio, norm_doc_no,
                                  norm_invoice_no, norm_party, to_date, valid_saudi_vat)
 
 MATCH_STATUSES = ["Matched", "Not Found in Ledger", "Possible Match", "Duplicate Invoice", "Amount Mismatch",
@@ -397,6 +397,7 @@ PROC = {
     "FX_MISSING": "Enter the authorised exchange rate for the currency (source: SAMA / approved policy rate) in engagement settings.",
     "VAT_RECALC": "Recalculate VAT at the applicable rate; investigate rounding or rate error; consider VAT return impact.",
     "VAT_ARITHMETIC_ERROR": "Re-perform invoice arithmetic (taxable + VAT = total, tolerance SAR 0.05) and discuss errors with the client.",
+    "HIJRI_DATE": "Agree the Hijri date to the original invoice and confirm the Gregorian equivalent (Umm al-Qura) before using it for period / cut-off testing.",
     "ZATCA_QR_MISSING": "Confirm whether the invoice should carry a ZATCA QR code under the e-invoicing phase applicable to the seller and invoice type; obtain the FATOORA-generated invoice.",
     "ZATCA_QR_INVALID": "Obtain the original e-invoice (XML / FATOORA copy); a malformed QR may indicate a non-compliant or altered document.",
     "ZATCA_QR_MISMATCH": "Compare the printed invoice with the QR data and the original e-invoice XML; a difference may indicate an altered PDF - escalate under ISA 240.",
@@ -505,6 +506,10 @@ def run_checks(eid: int, low_conf: float | None = None) -> list[dict]:
             add(_f("SELLER_VAT", "Low", f"Seller VAT number {sv} does not follow the 15-digit format (3…3)", "Format check", p("seller_vat")))
         if bv and not valid_saudi_vat(bv):
             add(_f("BUYER_VAT", "Low", f"Buyer VAT number {bv} does not follow the 15-digit format (3…3)", "Format check", p("buyer_vat")))
+        dn = (F.get("invoice_date") or {}).get("note") or ""
+        if dn.startswith(HIJRI_NOTE) and not (F.get("invoice_date") or {}).get("confirmed") \
+                and (F.get("invoice_date") or {}).get("method") != "auditor":
+            add(_f("HIJRI_DATE", "Low", dn, "Invoice dated in the Hijri calendar; Gregorian date derived by conversion", p("invoice_date")))
         for qf in _qr_checks(inv, r, doc):
             add(qf)
         if inv["doc_type"] in ("proforma", "quotation"):

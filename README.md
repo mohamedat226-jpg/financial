@@ -85,7 +85,10 @@ under your engagement terms and client confidentiality obligations before enabli
    ledger record and match evidence, manual evidence (columns L–O), AI-suggested explanation for P (written only
    after the auditor saves it), approve / investigate / reject, comments, change history.
 9. **Dashboard** – 11 KPIs, 7 charts and 9 filters (incl. reconciliation category), all computed from the same rows as the working paper.
-10. **Export** – completed working paper (copy of the template), PDF findings report, CSV extraction report,
+10. **Export** – completed working paper (copy of the template), PDF findings report, bilingual (Arabic / English)
+   executive summary PDF (scope, reconciliation, findings by risk, differences, ZATCA QR results, outstanding
+   procedures; the audit conclusion is left blank for the engagement team), extraction data as JSON in the
+   specification's contract with per-field provenance (page, bounding box, raw text, method, confidence), CSV extraction report,
    Excel exception report, extraction log + audit trail. **Finalise** (manager/partner) requires every invoice
    approved or rejected and no open high-risk findings; the engagement is then locked.
 
@@ -142,6 +145,7 @@ audit_app/
 
 * Rule-engine accuracy was measured on the generated test layouts; real client invoice layouts vary. Use AI mode
   for production volumes and always review low-confidence fields.
-* Hijri dates are detected and flagged but not converted.
+* Hijri dates are converted to Gregorian with the Umm al-Qura calendar (`hijridate`), but are always flagged
+  (`HIJRI_DATE`, confidence 0.6) until an auditor confirms them; an invalid Hijri date is left blank, never guessed.
 * Exchange rates are never assumed (except SAR = 1); the auditor enters the authorised rate and its source.
 * Single-node deployment (SQLite). For multi-user production use, run behind HTTPS with a reverse proxy and back up `AUDIT_DATA_DIR`.

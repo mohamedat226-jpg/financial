@@ -89,6 +89,7 @@ def gen_invoices(rng: random.Random, n=50):
     # ZATCA QR scenarios: valid Phase 1 by default; tampered PDF (QR total differs), no QR, Phase 2 tags
     for inv in invs:
         inv["qr"] = "valid"
+    invs[33]["hijri"] = True                                                              # date printed in Hijri only
     invs[9]["qr"] = "mismatch"
     invs[13]["qr"] = "none"
     invs[20]["qr"] = "phase2"
@@ -163,7 +164,12 @@ def render_invoice(inv) -> bytes:
         p.text(R, ar("الرقم الضريبي للبائع:"), right=True); p.text(400, SELLER[2], right=True); p.nl(26)
         p.text(R, ar("فاتورة ضريبية"), 16, True, True); p.nl(26)
         p.text(R, ar("رقم الفاتورة:"), right=True); p.text(400, inv["number"], right=True); p.nl()
-        p.text(R, ar("تاريخ الفاتورة:"), right=True); p.text(400, f"{inv['date']:%d/%m/%Y}", right=True); p.nl()
+        if inv.get("hijri"):
+            from hijridate import Gregorian
+            h = Gregorian(inv["date"].year, inv["date"].month, inv["date"].day).to_hijri()
+            p.text(R, ar("تاريخ الفاتورة (هجري):"), right=True); p.text(400, f"{h.day:02d}/{h.month:02d}/{h.year}", right=True); p.nl()
+        else:
+            p.text(R, ar("تاريخ الفاتورة:"), right=True); p.text(400, f"{inv['date']:%d/%m/%Y}", right=True); p.nl()
         p.text(R, ar("العملة:"), right=True); p.text(400, (ar("ريال سعودي") if cur == "SAR" else cur), right=True); p.nl(24)
         p.text(R, ar("اسم العميل:"), right=True); p.text(400, ar(cust_ar), right=True); p.nl()
         p.text(R, ar("الرقم الضريبي للعميل:"), right=True); p.text(400, cust_vat, right=True); p.nl(26)
@@ -405,7 +411,7 @@ def main(out=None):
                       "buyer_name": inv["customer"][0], "buyer_name_ar": inv["customer"][1], "currency": inv["currency"],
                       "taxable_amount": inv["taxable"], "vat_amount": inv["vat"], "gross_amount": inv["gross"],
                       "doc_type": inv["doc_type"], "layout": inv["layout"], "scanned": bool(inv.get("scanned")),
-                      "qr": inv["qr"]})
+                      "qr": inv["qr"], "hijri": bool(inv.get("hijri"))})
     build_template(out_dir / "Sales_Vouching_Invoices_Sample.xlsx")
     build_template_ar(out_dir / "Sales_Vouching_AR_Template.xlsx")
     build_ledger(invs, out_dir, rng)

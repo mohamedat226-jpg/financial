@@ -8,7 +8,7 @@ import threading
 import re
 import unicodedata
 
-from .normalize import (find_amounts, has_arabic, norm_text, parse_amount, parse_date, reverse_rtl,
+from .normalize import (HIJRI_NOTE, find_amounts, has_arabic, norm_text, parse_amount, parse_date, reverse_rtl,
                         valid_saudi_vat)
 from .pdf_text import DocText, Line
 
@@ -372,7 +372,9 @@ def extract(doc: DocText) -> dict:
         _, _, dnote = parse_date(fields["invoice_date"]["source_text"] or "")
         if dnote:
             fields["invoice_date"]["note"] = dnote
-            fields["invoice_date"]["confidence"] = min(fields["invoice_date"]["confidence"], 0.8)
+            # a converted Hijri date is never accepted without auditor confirmation (below the low-confidence bar)
+            cap = 0.6 if dnote.startswith(HIJRI_NOTE) else 0.8
+            fields["invoice_date"]["confidence"] = min(fields["invoice_date"]["confidence"], cap)
 
     fields["buyer_name"] = first_text_field("buyer_name", lambda t, ws: (t, ws) if len(t) > 2 and not re.fullmatch(r"[\d\s:/-]+", t) else None) or _field(None, 0)
     fields["seller_name"] = first_text_field("seller_name", lambda t, ws: (t, ws) if len(t) > 2 else None) or _field(None, 0)

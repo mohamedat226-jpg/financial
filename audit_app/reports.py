@@ -38,6 +38,21 @@ def _t(s) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _ar_lines(text: str, font: str, size: float, width: float) -> str:
+    """Wrap Arabic in logical order first, then apply shaping/bidi per line. Letting the PDF engine wrap an
+    already-reordered (visual) string puts the lines in the wrong order."""
+    out, cur = [], ""
+    for w in str(text).split():
+        trial = f"{cur} {w}".strip()
+        if cur and pdfmetrics.stringWidth(arabic_reshaper.reshape(trial), font, size) > width:
+            out.append(cur); cur = w
+        else:
+            cur = trial
+    if cur:
+        out.append(cur)
+    return "<br/>".join(_t(line) for line in out)
+
+
 def _m(v):
     return "" if v is None else f"{v:,.2f}"
 
@@ -193,4 +208,185 @@ def extraction_log_xlsx(eid: int) -> bytes:
            [[l["id"], l["ts"], l["user"], l["entity"], l["entity_id"], l["action"], l["field"], l["old_value"], l["new_value"],
              l["note"]] for l in log], [6, 20, 12, 10, 8, 18, 18, 30, 30, 40])
     buf = io.BytesIO(); wb.save(buf)
+    return buf.getvalue()
+
+
+# ------------------------------------------------------------------------------ executive report
+RECON_LABELS = {
+    "MATCHED_CLEAN": ("Matched - no difference", "مطابقة دون فرق"),
+    "WITHIN_TOLERANCE": ("Matched - within tolerance", "مطابقة ضمن حد التسامح"),
+    "MATERIAL_DIFFERENCE": ("Difference above tolerance", "فرق يتجاوز حد التسامح"),
+    "NOT_IN_LEDGER": ("Invoice not in ledger", "فاتورة غير مسجلة في الدفتر"),
+    "POSSIBLE_MATCH": ("Proposed match - awaiting auditor", "مطابقة مقترحة بانتظار المراجع"),
+    "DUPLICATE_INVOICE": ("Duplicate invoice number", "رقم فاتورة مكرر"),
+    "INCOMPLETE_DATA": ("Incomplete data (e.g. FX rate)", "بيانات ناقصة (مثل سعر الصرف)"),
+    "LEDGER_NOT_UPLOADED": ("Ledger not uploaded", "لم يُرفع الدفتر"),
+    "UNMATCHED_LEDGER_ROW": ("Ledger entries without invoice", "قيود في الدفتر بلا فاتورة"),
+}
+
+
+def executive_pdf(eid: int, user: str) -> bytes:
+    """Bilingual (English / Arabic) executive summary for the partner and the client. States facts from the
+    same canonical rows as every other output; the audit conclusion is left for the engagement team."""
+    from reportlab.lib.enums import TA_LEFT, TA_RIGHT
+    eng = db.q1("SELECT * FROM engagements WHERE id=?", (eid,))
+    s = engine.summary(eid)
+    rows = engine.compute_rows(eid)
+    fnd = db.q("SELECT * FROM findings WHERE engagement_id=? AND active=1", (eid,))
+    tol = float(eng["tolerance"])
+    bold = _FONT + ("-B" if _FONT != "Helvetica" else "")
+    ss = getSampleStyleSheet()
+    en = ParagraphStyle("en", parent=ss["BodyText"], fontName=_FONT, fontSize=8.5, leading=11, alignment=TA_LEFT)
+    arS = ParagraphStyle("ar", parent=en, alignment=TA_RIGHT)
+    small = ParagraphStyle("sm", parent=en, fontSize=7, leading=9, textColor=colors.HexColor("#444444"))
+    smallAr = ParagraphStyle("smar", parent=small, alignment=TA_RIGHT)
+    h1 = ParagraphStyle("h1", parent=en, fontName=bold, fontSize=15, leading=19)
+    h1ar = ParagraphStyle("h1ar", parent=h1, alignment=TA_RIGHT)
+    h2 = ParagraphStyle("h2", parent=en, fontName=bold, fontSize=10.5, leading=14, spaceBefore=8,
+                        textColor=colors.HexColor("#1F3864"))
+    navy, light = colors.HexColor("#1F3864"), colors.HexColor("#EEF2F7")
+
+    def head(e, a):   # bilingual section heading: English left, Arabic right
+        t = Table([[Paragraph(e, h2), Paragraph(_t(a), ParagraphStyle("h2ar", parent=h2, alignment=TA_RIGHT))]],
+                  colWidths=[93 * mm, 93 * mm])
+        t.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, 0), 0.6, navy), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                               ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+        return t
+
+    def lab(e, a):
+        return Paragraph(f"{e}<br/>{_t(a)}", small)
+
+    def grid(data, widths, num_cols=()):
+        t = Table(data, colWidths=widths, repeatRows=1)
+        st = [("FONT", (0, 0), (-1, -1), _FONT, 8), ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+              ("BACKGROUND", (0, 0), (-1, 0), navy), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+              ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]
+        st += [("ALIGN", (c, 1), (c, -1), "RIGHT") for c in num_cols]
+        t.setStyle(TableStyle(st))
+        return t
+
+    hdr = lambda e, a: Paragraph(f"<font color='white'>{e}<br/>{_t(a)}</font>", small)
+    final = eng["status"] == "finalized"
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=12 * mm, rightMargin=12 * mm, topMargin=14 * mm,
+                            bottomMargin=16 * mm, title=f"Executive Audit Summary - {eng['client_name']}")
+
+    def footer(c, d):
+        c.saveState(); c.setFont(_FONT, 7); c.setFillColor(colors.grey)
+        c.drawString(12 * mm, 8 * mm, f"{'FINAL' if final else 'DRAFT - subject to review'} | page {d.page}")
+        c.drawRightString(A4[0] - 12 * mm, 8 * mm, _t("مسودة - خاضعة للمراجعة") if not final else _t("نهائي"))
+        if not final:   # diagonal watermark on drafts
+            c.setFont(bold, 60); c.setFillColor(colors.Color(0.85, 0.1, 0.1, alpha=0.07))
+            c.translate(A4[0] / 2, A4[1] / 2); c.rotate(40); c.drawCentredString(0, 0, "DRAFT")
+        c.restoreState()
+
+    el = [Table([[Paragraph("Sales Vouching<br/>Executive Audit Summary", h1),
+                  Paragraph(_t("اختبار المبيعات") + "<br/>" + _t("الملخص التنفيذي للمراجعة"), h1ar)]], colWidths=[93 * mm, 93 * mm]),
+          Spacer(1, 4)]
+    info = [[lab("Client", "العميل"), Paragraph(_t(eng["client_name"]), en)],
+            [lab("Financial year", "السنة المالية"), Paragraph(f"{eng['financial_year']} ({eng['fy_start']} → {eng['fy_end']})", en)],
+            [lab("Status", "الحالة"), Paragraph(("FINAL" if final else "DRAFT - subject to auditor review") + " / "
+                                                + _t("نهائي" if final else "مسودة - خاضعة لمراجعة المراجع"), en)],
+            [lab("Tolerance / materiality (SAR)", "حد التسامح / الأهمية النسبية (ريال)"),
+             Paragraph(f"{tol:,.2f} / " + (f"{float(eng['materiality']):,.2f}" if eng["materiality"] else "not set / غير محدد"), en)],
+            [lab("Prepared by / on", "أعده / بتاريخ"), Paragraph(f"{_t(user)} · {datetime.now():%Y-%m-%d %H:%M}", en)]]
+    it = Table(info, colWidths=[55 * mm, 131 * mm])
+    it.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.25, colors.grey), ("BACKGROUND", (0, 0), (0, -1), light),
+                            ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    el += [it]
+
+    # 1. scope
+    cov = (s["total_value_tested_sar"] / s["ledger_total"]) if s.get("ledger_total") else None
+    el += [head("1. Scope of testing", "١. نطاق الاختبار")]
+    scope = [[hdr("Measure", "البند"), hdr("Value", "القيمة")],
+             [lab("Invoices tested", "عدد الفواتير المختبرة"), f"{s['invoices_tested']:,}"],
+             [lab("Value tested, SAR excl. VAT", "القيمة المختبرة بالريال (غير شاملة الضريبة)"), _m(s["total_value_tested_sar"])],
+             [lab("Sales ledger rows / total, SAR", "قيود دفتر المبيعات / إجماليها بالريال"), f"{s['ledger_rows']:,} / {_m(s['ledger_total'])}"],
+             [lab("Coverage of ledger value", "نسبة التغطية من قيمة الدفتر"), "n/a" if cov is None else f"{cov:.1%}"],
+             [lab("Invoices approved by auditor", "فواتير اعتمدها المراجع"), f"{s['approved']:,} / {s['invoices_tested']:,}"]]
+    el += [grid(scope, [120 * mm, 66 * mm], num_cols=(1,))]
+
+    # 2. reconciliation
+    rc = s["recon_categories"]
+    amt = {k: sum(r["amount_sar"] or 0 for r in rows if r["recon_category"] == k) for k in RECON_LABELS}
+    led_amt = sum(le["amount"] or 0 for le in engine.unmatched_ledger_rows(eid))
+    rec = [[hdr("Result", "النتيجة"), hdr("Count", "العدد"), hdr("SAR", "ريال")]]
+    for k, (e_, a_) in RECON_LABELS.items():
+        if rc.get(k):
+            rec.append([lab(e_, a_), f"{rc[k]:,}", _m(led_amt if k == "UNMATCHED_LEDGER_ROW" else amt[k])])
+    el += [head("2. Invoice-to-ledger reconciliation", "٢. مطابقة الفواتير مع دفتر المبيعات"),
+           grid(rec, [120 * mm, 26 * mm, 40 * mm], num_cols=(1, 2)),
+           Paragraph(f"Matching passes - exact: {s['match_passes']['pass1']}, normalised number: {s['match_passes']['pass2']}, "
+                     f"heuristic proposals (auditor sign-off required): {s['match_passes']['pass3']}. "
+                     "SAR column: invoice amount in SAR; for ledger entries without invoice, the ledger amount.", small)]
+
+    # 3. findings
+    fr = s["findings_by_risk"]
+    el += [head("3. Audit findings", "٣. ملاحظات المراجعة"),
+           grid([[hdr("High", "مرتفع"), hdr("Medium", "متوسط"), hdr("Low", "منخفض"), hdr("Open", "مفتوحة")],
+                 [str(fr["High"]), str(fr["Medium"]), str(fr["Low"]), str(s["exceptions"])]],
+                [46.5 * mm] * 4, num_cols=(0, 1, 2, 3))]
+    by_code: dict[str, list] = {}
+    for f in fnd:
+        if f["risk"] == "High":
+            by_code.setdefault(f["code"], []).append(f)
+    if by_code:
+        hi = [[hdr("High-risk finding", "ملاحظة عالية الخطورة"), hdr("Count", "العدد"), hdr("Example", "مثال")]]
+        for code, fs in sorted(by_code.items(), key=lambda kv: -len(kv[1])):
+            hi.append([Paragraph(code, small), str(len(fs)), Paragraph(_t(fs[0]["observation"])[:220], small)])
+        el += [Spacer(1, 4), grid(hi, [48 * mm, 16 * mm, 122 * mm], num_cols=(1,))]
+
+    # 4. differences above tolerance
+    diffs = sorted([r for r in rows if r["recon_category"] == "MATERIAL_DIFFERENCE"], key=lambda r: -abs(r["difference"]))
+    el += [head("4. Differences above tolerance", "٤. الفروقات التي تتجاوز حد التسامح")]
+    if diffs:
+        dd = [[hdr("Invoice", "الفاتورة"), hdr("Customer", "العميل"), hdr("Ledger", "الدفتر"), hdr("Invoice SAR", "الفاتورة بالريال"),
+               hdr("Difference", "الفرق"), hdr("Explanation", "التفسير")]]
+        for r in diffs[:12]:
+            expl = r["manual"].get("explanation")
+            txt = (f"Auditor: {expl}" if expl else f"Unconfirmed AI hypothesis: {r['suggestion'] or '-'}")
+            dd.append([Paragraph(_t(r["invoice_number"]), small), Paragraph(_t(r["customer"]), small), _m(r["ledger_amount"]),
+                       _m(r["amount_sar"]), _m(r["difference"]), Paragraph(_t(txt)[:260], small)])
+        el += [grid(dd, [26 * mm, 34 * mm, 24 * mm, 24 * mm, 22 * mm, 56 * mm], num_cols=(2, 3, 4)),
+               Paragraph(f"{len(diffs)} invoice(s); total {_m(sum(r['difference'] for r in diffs))} SAR"
+                         + (" (top 12 shown)" if len(diffs) > 12 else "") + ".", small)]
+    else:
+        el += [Paragraph("None. / " + _t("لا توجد."), en)]
+
+    # 5. ZATCA QR
+    q = s["qr"]
+    qcodes = {c: sum(1 for f in fnd if f["code"] == c) for c in ("ZATCA_QR_MISMATCH", "ZATCA_QR_INVALID", "ZATCA_QR_MISSING")}
+    el += [head("5. ZATCA e-invoice QR codes", "٥. رموز QR للفوترة الإلكترونية (ZATCA)"),
+           grid([[hdr("Checked", "تم فحصها"), hdr("QR found", "وُجد رمز"), hdr("Valid TLV", "صالح"),
+                  hdr("Disagrees with invoice", "يخالف الفاتورة"), hdr("Invalid", "غير صالح"), hdr("Missing", "غير موجود")],
+                 [str(q["checked"]), str(q["found"]), str(q["valid"]), str(qcodes["ZATCA_QR_MISMATCH"]),
+                  str(qcodes["ZATCA_QR_INVALID"]), str(qcodes["ZATCA_QR_MISSING"])]], [31 * mm] * 6, num_cols=range(6)),
+           Paragraph("QR data is compared with the printed invoice; Phase 2 cryptographic signatures are not verified by this tool.", small),
+           Paragraph(_ar_lines("تُقارن بيانات رمز QR بالفاتورة المطبوعة، ولا يتحقق هذا النظام من التوقيع الرقمي للمرحلة الثانية.",
+                               _FONT, 7, 180 * mm), smallAr)]
+
+    # 6. outstanding + conclusion
+    el += [head("6. Outstanding procedures", "٦. الإجراءات المتبقية"),
+           Paragraph(f"{len(s['outstanding_procedures'])} invoice(s) with outstanding manual evidence (GDN, price list, approval), "
+                     "difference explanations or auditor approval - detail in the Audit Findings report.", en),
+           Paragraph(_ar_lines(f"{len(s['outstanding_procedures'])} فاتورة عليها إجراءات متبقية (إشعار التسليم، قائمة الأسعار، "
+                               "الاعتماد، تفسير الفروقات أو اعتماد المراجع) - التفاصيل في تقرير ملاحظات المراجعة.",
+                               _FONT, 8.5, 180 * mm), arS),
+           head("7. Engagement team conclusion", "٧. استنتاج فريق المراجعة")]
+    concl = Table([[Paragraph("To be completed by the engagement team. This report does not express an audit conclusion.", small),
+                    Paragraph(_ar_lines("يُستكمل من فريق المراجعة. لا يتضمن هذا التقرير رأيًا أو استنتاجًا مهنيًا.",
+                                        _FONT, 7, 85 * mm), smallAr)],
+                   ["", ""], [Paragraph("Prepared by / date:", small), Paragraph(_t("أعده / التاريخ:"), smallAr)],
+                   [Paragraph("Reviewed by / date:", small), Paragraph(_t("راجعه / التاريخ:"), smallAr)]],
+                  colWidths=[93 * mm, 93 * mm], rowHeights=[None, 28 * mm, 9 * mm, 9 * mm])
+    concl.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.5, colors.grey), ("LINEBELOW", (0, 1), (-1, 2), 0.25, colors.grey),
+                               ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    el += [concl, Spacer(1, 6),
+           Paragraph("Basis: values were extracted from the invoice PDFs by an automated (rule-based / AI-assisted) process and are "
+                     "subject to auditor confirmation; every figure is traceable to its page in the extraction log. A finding is "
+                     "not a conclusion on misstatement.", small),
+           Paragraph(_ar_lines("أساس الإعداد: استُخرجت القيم من فواتير PDF بعملية آلية وتخضع لتأكيد المراجع، وكل رقم قابل للتتبع "
+                               "إلى صفحته في سجل الاستخراج. الملاحظة لا تعني وجود تحريف.", _FONT, 7, 180 * mm), smallAr)]
+    doc.build(el, onFirstPage=footer, onLaterPages=footer)
+    db.log(user, eid, "engagement", eid, "export_executive_pdf")
     return buf.getvalue()

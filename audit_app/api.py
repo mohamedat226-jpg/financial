@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, engine, ledger, reports, security, workpaper
+from . import config, contract, db, engine, ledger, reports, security, workpaper
 from .extraction import pipeline
 from .extraction.normalize import norm_party, parse_amount, to_date
 from .modules import MODULES
@@ -459,6 +459,15 @@ def invoice_detail(iid: int, user=Depends(current_user)):
             "engagement_status": _eng(eid)["status"]}
 
 
+@app.get("/api/invoices/{iid}/extraction.json")
+def invoice_extraction_json(iid: int, user=Depends(current_user)):
+    """One invoice in the specification's JSON contract (Section 3.1), with provenance."""
+    i = _inv(iid)
+    inv = next(x for x in engine.load_invoices(i["engagement_id"]) if x["id"] == iid)
+    row = next((r for r in engine.compute_rows(i["engagement_id"]) if r["invoice_id"] == iid), None)
+    return contract.invoice_contract(inv, row, db.q("SELECT * FROM findings WHERE invoice_id=? AND active=1", (iid,)))
+
+
 @app.get("/api/invoices/{iid}/pdf")
 def invoice_pdf(iid: int, user=Depends(current_user)):
     i = db.q1("SELECT f.stored_path, f.original_name FROM invoices i JOIN files f ON f.id=i.file_id WHERE i.id=?", (iid,))
@@ -756,6 +765,12 @@ def export(eid: int, kind: str, user=Depends(current_user)):
     if kind == "exceptions.xlsx":
         return _download(reports.exceptions_xlsx(eid), f"{base}_Exceptions.xlsx",
                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    if kind == "executive.pdf":
+        return _download(reports.executive_pdf(eid, user["username"]), f"{base}_Executive_Summary.pdf", "application/pdf")
+    if kind == "extraction.json":
+        data = json.dumps(contract.engagement_contract(eid), ensure_ascii=False, indent=1, default=str).encode("utf-8")
+        db.log(user["username"], eid, "engagement", eid, "export_extraction_json")
+        return _download(data, f"{base}_Extraction.json", "application/json")
     if kind == "log.xlsx":
         return _download(reports.extraction_log_xlsx(eid), f"{base}_Extraction_Log.xlsx",
                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

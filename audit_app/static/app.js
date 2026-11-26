@@ -519,7 +519,8 @@ function viewExports(v) {
   const s = S.summary, e = S.eng;
   v.innerHTML = `<div class="grid g2"><div class="card"><h3>${t("exports")}</h3><div class="grid">
     <button class="primary" id="xWp">⬇ ${t("exportWp")}</button><button data-x="findings.pdf">⬇ ${t("exportPdf")}</button>
-    <button data-x="extraction.csv">⬇ ${t("exportCsv")}</button><button data-x="exceptions.xlsx">⬇ ${t("exportExc")}</button><button data-x="log.xlsx">⬇ ${t("exportLog")}</button></div>
+    <button data-x="extraction.csv">⬇ ${t("exportCsv")}</button><button data-x="exceptions.xlsx">⬇ ${t("exportExc")}</button><button data-x="log.xlsx">⬇ ${t("exportLog")}</button>
+    <button data-x="executive.pdf">⬇ ${t("exportExec")}</button><button data-x="extraction.json">⬇ ${t("exportJson")}</button></div>
     <p class="small muted">The working paper is written to a copy of the uploaded template; the original is never modified. Until finalised it is marked DRAFT.</p>
     <h4>${t("finalize")}</h4>${e.status === "finalized" ? `<div class="notice">✓ ${t("finalized")} – ${esc(e.finalized_by)} · ${esc(e.finalized_at)}</div>${S.user.permissions.finalize ? `<button class="sm" id="reopen" style="margin-top:8px">Re-open…</button>` : ""}`
       : `<p class="small">Requires every invoice approved or rejected, no open high-risk findings, and manager/partner role.</p><button class="good" id="fin" ${S.user.permissions.finalize ? "" : "disabled"}>${t("finalize")}</button>`}
