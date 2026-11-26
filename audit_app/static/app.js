@@ -61,7 +61,9 @@ function applyLang() {
 function logout() { sessionStorage.removeItem("tok"); S.token = null; S.user = null; clearInterval(S.poll); render(); }
 
 /* ------------------------------------------------------------------------------------- badges */
-function statusBadge(s) {
+/* Translated display label for a stored status value (the value itself is never changed). */
+const sl = (s) => (s === null || s === undefined ? "" : ((window.STATUS_LABELS || {})[S.lang] || {})[s] ?? ((window.STATUS_LABELS || {}).en || {})[s] ?? s);
+function statusBadge(s, label) {
   const map = { "Matched": "good", "No Difference": "good", "approved": "good", "cleared": "good", "extracted": "neutral",
     "Possible Match": "warn", "Customer Mismatch": "warn", "Missing Ledger Amount": "warn", "pending": "neutral", "investigate": "warn",
     "Amount Mismatch": "crit", "Not Found in Ledger": "crit", "Duplicate Invoice": "crit", "Difference Identified": "crit",
@@ -71,7 +73,7 @@ function statusBadge(s) {
     "DUPLICATE_INVOICE": "crit", "INCOMPLETE_DATA": "serious", "LEDGER_NOT_UPLOADED": "neutral", "UNMATCHED_LEDGER_ROW": "crit" };
   const icon = { good: "✓", warn: "!", crit: "✕", serious: "▲", neutral: "•" };
   const c = map[s] || "neutral";
-  return `<span class="badge b-${c}">${icon[c]} ${esc(s)}</span>`;
+  return `<span class="badge b-${c}" title="${esc(s)}">${icon[c]} ${esc(label ?? sl(s))}</span>`;
 }
 const lowConf = () => (S.summary && S.summary.low_confidence_threshold) || 0.85;
 const RECON = ["MATCHED_CLEAN", "WITHIN_TOLERANCE", "MATERIAL_DIFFERENCE", "NOT_IN_LEDGER", "POSSIBLE_MATCH", "DUPLICATE_INVOICE", "INCOMPLETE_DATA", "LEDGER_NOT_UPLOADED"];
@@ -118,7 +120,7 @@ async function renderHome(app) {
       ${S.user.role === "admin" ? `<a class="btn" href="#users">${t("users")}</a>` : ""}</div>
       <div class="table-wrap"><table class="t"><thead><tr><th>${t("client")}</th><th>${t("fy")}</th><th>${t("status")}</th><th class="num">Invoices</th><th>Created</th><th></th></tr></thead>
       <tbody>${engs.map((e) => `<tr class="click" data-id="${e.id}"><td><b>${esc(e.client_name)}</b></td><td>${esc(e.financial_year)} <span class="muted small">${esc(e.fy_start)} → ${esc(e.fy_end)}</span></td>
-        <td>${e.status === "finalized" ? statusBadge("approved").replace("approved", t("finalized")) : `<span class="badge b-neutral">${t("draft")}</span>`}</td>
+        <td>${e.status === "finalized" ? statusBadge("approved", t("finalized")) : `<span class="badge b-neutral">${t("draft")}</span>`}</td>
         <td class="num">${e.invoice_count}</td><td class="small muted">${esc(e.created_by)} · ${esc(e.created_at.slice(0, 10))}</td><td><button class="sm">${t("open")}</button></td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("noData")}</td></tr>`}</tbody></table></div></div>
     <div class="card"><h3>${t("newEngagement")}</h3>
       <form id="nf" class="grid">
@@ -154,7 +156,7 @@ async function loadEng() {
 async function renderEngagement(app) {
   await loadEng();
   const e = S.eng;
-  $("#crumb").innerHTML = `<a href="#">${t("engagements")}</a> / <b>${esc(e.client_name)}</b> · FY ${esc(e.financial_year)} ${e.status === "finalized" ? statusBadge("approved").replace("approved", t("finalized")) : ""}`;
+  $("#crumb").innerHTML = `<a href="#">${t("engagements")}</a> / <b>${esc(e.client_name)}</b> · FY ${esc(e.financial_year)} ${e.status === "finalized" ? statusBadge("approved", t("finalized")) : ""}`;
   const openF = S.summary.exceptions;
   app.innerHTML = `<nav class="tabs" role="tablist">${TABS.map((k) => `<button class="tab ${S.tab === k ? "active" : ""}" data-tab="${k}">${t(k)}${k === "findings" && openF ? ` <span class="badge b-crit">${openF}</span>` : ""}</button>`).join("")}</nav><div id="view"></div>`;
   $$(".tab").forEach((b) => b.addEventListener("click", () => (location.hash = `e/${S.eid}/${b.dataset.tab}${b.dataset.tab === "review" && S.invoiceId ? "/" + S.invoiceId : ""}`)));
@@ -280,18 +282,18 @@ function filtered() {
 }
 function viewDashboard(v) {
   const uniq = (k) => [...new Set(S.rows.map((r) => r[k]).filter(Boolean))].sort();
-  const sel = (key, label, opts) => `<label class="f">${label}<select data-f="${key}"><option value="">${t("all")}</option>${opts.map((o) => `<option ${S.filters[key] === o ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`;
+  const sel = (key, label, opts, labels = true) => `<label class="f">${label}<select data-f="${key}"><option value="">${t("all")}</option>${opts.map((o) => `<option value="${esc(o)}" ${S.filters[key] === o ? "selected" : ""}>${esc(labels ? sl(o) : o)}</option>`).join("")}</select></label>`;
   v.innerHTML = `<div class="filters card">
     <label class="f">${t("fy")}<select disabled><option>${esc(S.eng.financial_year)}</option></select></label>
     <label class="f">${t("from")}<input type="date" data-f="from" value="${esc(S.filters.from || "")}"></label>
     <label class="f">${t("to")}<input type="date" data-f="to" value="${esc(S.filters.to || "")}"></label>
-    ${sel("customer", t("customer"), uniq("customer"))}
+    ${sel("customer", t("customer"), uniq("customer"), false)}
     <label class="f">${t("invNo")}<input data-f="invno" value="${esc(S.filters.invno || "")}"></label>
-    ${sel("currency", t("currency"), uniq("currency"))}
+    ${sel("currency", t("currency"), uniq("currency"), false)}
     ${sel("match", t("match"), ["Matched", "Not Found in Ledger", "Possible Match", "Duplicate Invoice", "Amount Mismatch", "Customer Mismatch", "Ledger Not Uploaded"])}
     ${sel("diff", t("diffStatus"), ["No Difference", "Difference Identified", "Missing Ledger Amount", "Missing Invoice Data"])}
     ${sel("recon", t("recon"), RECON)}
-    <label class="f">${t("riskF")}<select data-f="risk"><option value="">${t("all")}</option>${["High", "Medium", "Low", "None"].map((o) => `<option value="${o}" ${S.filters.risk === o ? "selected" : ""}>${o === "None" ? t("noRisk") : esc(o)}</option>`).join("")}</select></label>
+    <label class="f">${t("riskF")}<select data-f="risk"><option value="">${t("all")}</option>${["High", "Medium", "Low", "None"].map((o) => `<option value="${o}" ${S.filters.risk === o ? "selected" : ""}>${o === "None" ? t("noRisk") : esc(sl(o))}</option>`).join("")}</select></label>
     ${sel("review", t("reviewStatus"), ["pending", "approved", "investigate", "rejected"])}
     <button id="fr">${t("reset")}</button>
     <span class="spacer"></span>
@@ -361,7 +363,7 @@ function drawDash() {
   const mStat = ["Matched", "Amount Mismatch", "Customer Mismatch", "Possible Match", "Duplicate Invoice", "Not Found in Ledger", "Ledger Not Uploaded"];
   const statusCol = { "Matched": css("--good"), "Amount Mismatch": css("--crit"), "Customer Mismatch": css("--warn"), "Possible Match": css("--serious"), "Duplicate Invoice": css("--s7"), "Not Found in Ledger": css("--s8"), "Ledger Not Uploaded": css("--text-3") };
   const present = mStat.filter((s) => R.some((r) => r.match_status === s));
-  mk("cMatch", { type: "bar", data: { labels: present, datasets: [{ label: "Invoices", data: present.map((s) => R.filter((r) => r.match_status === s).length), backgroundColor: present.map((s) => statusCol[s]), ...bar }] }, options: base(drill("match", present)) });
+  mk("cMatch", { type: "bar", data: { labels: present.map(sl), datasets: [{ label: "Invoices", data: present.map((s) => R.filter((r) => r.match_status === s).length), backgroundColor: present.map((s) => statusCol[s]), ...bar }] }, options: base(drill("match", present)) });
   const dif = R.filter((r) => r.difference !== null && r.diff_status === "Difference Identified").sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference)).slice(0, 12);
   mk("cDiff", { type: "bar", data: { labels: dif.map((r) => r.invoice_number || r.file), datasets: [{ label: "Difference SAR", data: dif.map((r) => r.difference), backgroundColor: dif.map((r) => (r.difference > 0 ? c2 : c1)), ...bar, borderSkipped: false }] },
     options: base({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `SAR ${fmt(c.raw)} (${c.raw > 0 ? "ledger higher" : "ledger lower"})` } } }, scales: { x: { grid: { display: false }, ticks: { maxRotation: 60, autoSkip: false, font: { size: 10 } } }, y: { grid: { color: css("--grid") } } } }) });
@@ -371,10 +373,10 @@ function drawDash() {
   const reconCol = { MATCHED_CLEAN: css("--good"), WITHIN_TOLERANCE: css("--s3"), MATERIAL_DIFFERENCE: css("--crit"), NOT_IN_LEDGER: css("--s8"),
     POSSIBLE_MATCH: css("--serious"), DUPLICATE_INVOICE: css("--s7"), INCOMPLETE_DATA: css("--warn"), LEDGER_NOT_UPLOADED: css("--text-3") };
   const rc = RECON.filter((k) => R.some((r) => r.recon_category === k));
-  mk("cRecon", { type: "bar", data: { labels: rc, datasets: [{ label: "Invoices", data: rc.map((k) => R.filter((r) => r.recon_category === k).length), backgroundColor: rc.map((k) => reconCol[k]), ...bar }] },
+  mk("cRecon", { type: "bar", data: { labels: rc.map(sl), datasets: [{ label: "Invoices", data: rc.map((k) => R.filter((r) => r.recon_category === k).length), backgroundColor: rc.map((k) => reconCol[k]), ...bar }] },
     options: base({ indexAxis: "y", ...drill("recon", rc), scales: { x: { beginAtZero: true, grid: { color: css("--grid") } }, y: { grid: { display: false }, ticks: { font: { size: 10 } } } } }) });
   const rk = ["High", "Medium", "Low", "None"];
-  mk("cRisk", { type: "bar", data: { labels: rk.map((x) => (x === "None" ? t("noRisk") : x)), datasets: [{ label: "Invoices", data: rk.map((x) => R.filter((r) => (r.risk || "None") === x).length), backgroundColor: [css("--crit"), css("--warn"), css("--text-3"), css("--good")], ...bar }] },
+  mk("cRisk", { type: "bar", data: { labels: rk.map((x) => (x === "None" ? t("noRisk") : sl(x))), datasets: [{ label: "Invoices", data: rk.map((x) => R.filter((r) => (r.risk || "None") === x).length), backgroundColor: [css("--crit"), css("--warn"), css("--text-3"), css("--good")], ...bar }] },
     options: base(drill("risk", rk)) });
   const qk = [["valid_phase1", "qrValid1", css("--good")], ["valid_phase2", "qrValid2", css("--s3")], ["invalid", "qrInvalid", css("--crit")], ["not_found", "qrNotFound", css("--warn")], ["not_checked", "qrNotChecked", css("--text-3")]]
     .filter(([k]) => R.some((r) => r.qr_status === k));
@@ -393,8 +395,8 @@ async function viewFindings(v) {
   S.findings = await api("GET", `/api/engagements/${S.eid}/findings`);
   const byInv = Object.fromEntries(S.rows.map((r) => [r.invoice_id, r]));
   v.innerHTML = `<div class="card"><div class="row"><h3>${t("findings")}</h3><span class="spacer"></span>
-    <select id="fRisk"><option value="">${t("risk")}: ${t("all")}</option><option>High</option><option>Medium</option><option>Low</option></select>
-    <select id="fSt"><option value="">${t("auditorStatus")}: ${t("all")}</option><option>open</option><option>cleared</option><option>escalated</option><option>adjustment_proposed</option></select></div>
+    <select id="fRisk"><option value="">${t("risk")}: ${t("all")}</option>${["High", "Medium", "Low"].map((o) => `<option value="${o}">${esc(sl(o))}</option>`).join("")}</select>
+    <select id="fSt"><option value="">${t("auditorStatus")}: ${t("all")}</option>${["open", "cleared", "escalated", "adjustment_proposed"].map((o) => `<option value="${o}">${esc(sl(o))}</option>`).join("")}</select></div>
     <div class="table-wrap" style="margin-top:10px;max-height:75vh"><table class="t" id="ft"><thead><tr><th>${t("risk")}</th><th>${t("invNo")}</th><th>${t("observation")}</th><th>${t("reason")}</th><th>${t("document")}</th><th>${t("procedure")}</th><th>${t("auditorStatus")}</th></tr></thead><tbody></tbody></table></div></div>`;
   const draw = () => {
     const r = $("#fRisk").value, s = $("#fSt").value;
@@ -445,11 +447,11 @@ async function viewReview(v) {
   const can = S.user.permissions.edit && d.engagement_status !== "finalized";
   const order = ["invoice_number", "invoice_date", "buyer_name", "buyer_vat", "seller_name", "seller_vat", "currency", "description", "quantity", "unit_price", "discount", "taxable_amount", "vat_rate", "vat_amount", "gross_amount", "credit_note_ref", "purchase_order"];
   const man = inv.manual || {};
-  const yn = (k, label) => `<label class="f">${label}<select data-man="${k}" ${can ? "" : "disabled"}><option value=""></option>${["Yes", "No", "N/A"].map((o) => `<option ${man[k] === o ? "selected" : ""}>${o}</option>`).join("")}</select></label>`;
+  const yn = (k, label) => `<label class="f">${label}<select data-man="${k}" ${can ? "" : "disabled"}><option value=""></option>${["Yes", "No", "N/A"].map((o) => `<option value="${o}" ${man[k] === o ? "selected" : ""}>${esc(sl(o))}</option>`).join("")}</select></label>`;
   v.innerHTML = `<div class="row" style="margin-bottom:10px">
       <button ${d.prev_id ? "" : "disabled"} id="pv">‹ ${t("prev")}</button><button ${d.next_id ? "" : "disabled"} id="nx">${t("next")} ›</button>
-      <b dir="ltr">${esc(inv.original_name)}</b> ${statusBadge(inv.status)} ${statusBadge(inv.review_status)} <span class="badge b-neutral">${esc(inv.doc_type || "unclassified")}</span>
-      <span class="badge b-neutral">${esc(inv.language || "")}</span><span class="small muted">${esc(inv.extraction_method || "")} · ${inv.page_count || "?"} page(s) · SHA-256 ${esc(inv.sha256.slice(0, 12))}…</span>
+      <b dir="ltr">${esc(inv.original_name)}</b> ${statusBadge(inv.status)} ${statusBadge(inv.review_status)} <span class="badge b-neutral" title="${esc(inv.doc_type || "unclassified")}">${esc(sl(inv.doc_type || "unclassified"))}</span>
+      <span class="badge b-neutral" title="${esc(inv.language || "")}">${esc(sl("lang_" + (inv.language || "")) === "lang_" ? "" : sl("lang_" + (inv.language || "")))}</span><span class="small muted">${esc(sl("m_" + (inv.extraction_method || "")).replace(/^m_/, ""))} · ${inv.page_count || "?"} page(s) · SHA-256 ${esc(inv.sha256.slice(0, 12))}…</span>
       <span class="spacer"></span><button id="openPdf">${t("openPdf")}</button></div>
     ${(inv.extraction_notes || []).length ? `<div class="notice warn" style="margin-bottom:10px">${inv.extraction_notes.map(esc).join("<br>")}</div>` : ""}
     <div class="review">
@@ -463,7 +465,7 @@ async function viewReview(v) {
               <input data-k="${k}" value="${esc(f.value ?? "")}" dir="auto" ${can ? "" : "disabled"}>
               ${f.method === "auditor" && ai.value !== f.value ? `<div class="small muted">AI: ${esc(ai.value ?? "—")} → ${esc(f.edited_by)}</div>` : ""}
               ${f.note ? `<div class="small muted">${esc(f.note)}</div>` : ""}</td>
-              <td>${f.method === "auditor" ? '<span class="badge b-aud">Auditor</span>' : f.value === null || f.value === undefined ? "" : `<span class="badge b-ai">AI · ${esc(f.method)}</span>`}${f.confirmed && f.method !== "auditor" ? ' <span class="badge b-aud">✓</span>' : ""}</td>
+              <td>${f.method === "auditor" ? `<span class="badge b-aud">${esc(sl("auditor"))}</span>` : f.value === null || f.value === undefined ? "" : `<span class="badge b-ai" title="${esc(f.method)}">${esc(sl("m_" + f.method).replace(/^m_/, ""))}</span>`}${f.confirmed && f.method !== "auditor" ? ' <span class="badge b-aud">✓</span>' : ""}</td>
               <td>${f.value === null || f.value === undefined ? "" : confBar(f.confidence)}</td><td>${f.page ?? ""}</td>
               <td>${can && f.value !== null && f.value !== undefined && !f.confirmed ? `<button class="sm" data-confirm="${k}">${t("confirm")}</button>` : ""}</td></tr>`; }).join("")}
           </tbody></table></div>
@@ -478,7 +480,7 @@ async function viewReview(v) {
           <span>K · ${t("diff")} = D − J</span><b class="num">${fmt(row.difference)}</b>
           <span>${t("diffStatus")}</span><span>${statusBadge(row.diff_status || "")}</span></div>
           ${can && row.currency && row.currency !== "SAR" ? `<div class="row" style="margin-top:8px"><button class="sm" id="fxo">Invoice-specific rate…</button></div>` : ""}</div>
-        <div class="card"><h3>${t("ledgerRecord")}</h3><div>${statusBadge(m.status || "Ledger Not Uploaded")} ${m.method ? `<span class="small muted">${esc(m.method)}</span>` : ""}</div>
+        <div class="card"><h3>${t("ledgerRecord")}</h3><div>${statusBadge(m.status || "Ledger Not Uploaded")} ${m.method ? `<span class="small muted" title="${esc(m.method)}">${esc(sl(m.method))}</span>` : ""}</div>
           ${d.ledger ? `<div class="calc" style="margin-top:8px"><span>Row</span><b>${d.ledger.row_number}</b><span>${t("invNo")}</span><b>${esc(d.ledger.invoice_number)}</b><span>${t("customer")}</span><b dir="auto">${esc(d.ledger.customer)}</b><span>${t("invDate")}</span><b>${esc(d.ledger.date)}</b><span>Amount</span><b class="num">${fmt(d.ledger.amount)}</b></div>` : ""}
           <ul class="evidence small">${(m.evidence || []).map((e) => `<li dir="auto">${esc(e)}</li>`).join("")}</ul>
           ${m.status === "Customer Mismatch" && d.ledger && can ? `<button class="sm" id="alias">${t("confirmAlias")}</button>` : ""}

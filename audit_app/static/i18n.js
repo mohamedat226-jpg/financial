@@ -113,3 +113,47 @@ window.FIELD_LABELS = {
     vat_rate: "نسبة الضريبة %", vat_amount: "مبلغ الضريبة", gross_amount: "الإجمالي شامل الضريبة", credit_note_ref: "مرجع الإشعار الدائن",
     purchase_order: "أمر الشراء" },
 };
+
+/* Display labels for status values. The stored values (left) never change: filters, exports and the API use them;
+   only what is shown is translated. Unknown values fall back to the raw value. */
+window.STATUS_LABELS = {
+  en: {
+    MATCHED_CLEAN: "Matched – no difference", WITHIN_TOLERANCE: "Matched – within tolerance", MATERIAL_DIFFERENCE: "Difference above tolerance",
+    NOT_IN_LEDGER: "Not in ledger", POSSIBLE_MATCH: "Proposed match", DUPLICATE_INVOICE: "Duplicate invoice", INCOMPLETE_DATA: "Incomplete data",
+    LEDGER_NOT_UPLOADED: "Ledger not uploaded", UNMATCHED_LEDGER_ROW: "Ledger entry without invoice",
+    pending: "Pending", approved: "Approved", investigate: "Further investigation", rejected: "Rejected",
+    extracted: "Extracted", needs_manual: "Needs manual entry", failed: "Failed", queued: "Queued", processing: "Processing", superseded: "Excluded",
+    open: "Open", cleared: "Cleared", escalated: "Escalated", adjustment_proposed: "Adjustment proposed",
+    pass1_exact: "Pass 1 – exact", pass2_normalized: "Pass 2 – normalised number", pass3_heuristic: "Pass 3 – proposal",
+    auditor_confirmed: "Confirmed by auditor", auditor_rejected: "Rejected by auditor", suggested: "Suggested",
+    tax_invoice: "Tax invoice", simplified_tax_invoice: "Simplified tax invoice", credit_note: "Credit note", debit_note: "Debit note",
+    proforma: "Proforma", quotation: "Quotation", unclassified: "Unclassified",
+    "N/A": "N/A",
+    lang_ar: "Arabic", lang_en: "English", lang_mixed: "Arabic + English", lang_bilingual: "Arabic + English", lang_unknown: "Language not identified",
+    auditor: "Auditor", m_rule: "AI · rule engine", m_rules: "AI · rule engine", m_ai: "AI · Claude", "m_rules+ai": "AI · rules + Claude",
+    m_derived: "AI · derived", m_ocr: "AI · OCR", m_none: "Not extracted",
+  },
+  ar: {
+    "Matched": "مطابقة", "Not Found in Ledger": "غير موجودة في الدفتر", "Possible Match": "مطابقة محتملة", "Duplicate Invoice": "فاتورة مكررة",
+    "Amount Mismatch": "اختلاف في المبلغ", "Customer Mismatch": "اختلاف في العميل", "Ledger Not Uploaded": "لم يُرفع الدفتر",
+    "No Difference": "لا يوجد فرق", "Difference Identified": "يوجد فرق", "Missing Ledger Amount": "مبلغ الدفتر غير متوفر",
+    "Missing Invoice Data": "بيانات الفاتورة ناقصة",
+    MATCHED_CLEAN: "مطابقة دون فرق", WITHIN_TOLERANCE: "مطابقة ضمن حد التسامح", MATERIAL_DIFFERENCE: "فرق يتجاوز حد التسامح",
+    NOT_IN_LEDGER: "غير مسجلة في الدفتر", POSSIBLE_MATCH: "مطابقة مقترحة", DUPLICATE_INVOICE: "رقم فاتورة مكرر", INCOMPLETE_DATA: "بيانات ناقصة",
+    LEDGER_NOT_UPLOADED: "لم يُرفع الدفتر", UNMATCHED_LEDGER_ROW: "قيد في الدفتر بلا فاتورة",
+    pending: "بانتظار المراجعة", approved: "معتمدة", investigate: "تحتاج تحققًا إضافيًا", rejected: "مرفوضة",
+    extracted: "مستخرجة", needs_manual: "تحتاج إدخالًا يدويًا", failed: "فشل الاستخراج", queued: "في الانتظار", processing: "قيد المعالجة",
+    superseded: "مستبعدة",
+    open: "مفتوحة", cleared: "مُقفلة", escalated: "مُصعَّدة", adjustment_proposed: "قيد تسوية مقترح",
+    High: "مرتفع", Medium: "متوسط", Low: "منخفض",
+    "TLV valid": "صالح (TLV)", "TLV invalid": "غير صالح (TLV)",
+    pass1_exact: "المرحلة 1 – تطابق تام", pass2_normalized: "المرحلة 2 – رقم موحّد", pass3_heuristic: "المرحلة 3 – اقتراح",
+    auditor_confirmed: "أكدها المراجع", auditor_rejected: "رفضها المراجع", suggested: "مقترحة",
+    tax_invoice: "فاتورة ضريبية", simplified_tax_invoice: "فاتورة ضريبية مبسطة", credit_note: "إشعار دائن", debit_note: "إشعار مدين",
+    proforma: "فاتورة مبدئية", quotation: "عرض سعر", unclassified: "غير مصنفة",
+    Yes: "نعم", No: "لا", "N/A": "لا ينطبق",
+    lang_ar: "العربية", lang_en: "الإنجليزية", lang_mixed: "عربي + إنجليزي", lang_bilingual: "عربي + إنجليزي", lang_unknown: "لغة غير محددة",
+    auditor: "المراجع", m_rule: "آلي · محرك القواعد", m_rules: "آلي · محرك القواعد", m_ai: "آلي · Claude", "m_rules+ai": "آلي · القواعد + Claude",
+    m_derived: "آلي · محسوبة", m_ocr: "آلي · OCR", m_none: "لم تُستخرج",
+  },
+};
