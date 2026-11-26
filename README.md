@@ -44,14 +44,20 @@ auditor instead of being silently resolved.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | – | Enables AI extraction. Without it, scanned invoices are flagged for manual entry (no values are guessed). |
+| `ANTHROPIC_API_KEY` | – | Enables AI extraction. Without it (and without local OCR), scanned invoices are flagged for manual entry (no values are guessed). |
+| `AUDIT_OCR` | `auto` | `auto`: read scanned PDFs with local Tesseract OCR when it is installed; `off`: never use local OCR. |
 | `AUDIT_EXTRACTION_MODE` | `auto` | `auto` (AI for scanned / low confidence), `ai_always` (AI + rule cross-check on every file), `rules_only` (never call AI). |
 | `AUDIT_AI_MODEL` / `AUDIT_AI_EFFORT` | `claude-opus-5-5` / `high` | Model and effort level. |
 | `AUDIT_DATA_DIR` | `./data` | SQLite database, preserved uploads (read-only) and generated outputs. |
 | `AUDIT_WORKERS` | `4` | Parallel extraction workers. |
 | `AUDIT_LOW_CONFIDENCE` | `0.85` | Below this, fields are highlighted and raise a `LOW_CONFIDENCE` finding until confirmed. |
 
-Optional local OCR: install `pytesseract` and the `tesseract` binary with `ara` + `eng` language data.
+**Local OCR for scanned invoices** (offline, no API key): install the Tesseract binary with Arabic and English data
+(`apt-get install tesseract-ocr tesseract-ocr-ara`; `pytesseract` is in `requirements.txt`). Each OCR'd field's confidence
+is capped at Tesseract's own confidence for the words it came from, and an `OCR_READ` finding stays open until the key
+values are agreed to the image. On the generated scanned samples (8 invoices, 56 key fields) OCR read every field
+correctly on the English and Arabic layouts; on the bilingual layout the currency was misread once and was left blank
+(flagged), never guessed. Accuracy on real client scans (resolution, stamps, handwriting) must be measured before reliance.
 
 **Data protection:** with AI enabled, invoice PDFs are sent to the Anthropic API. Confirm this is permitted
 under your engagement terms and client confidentiality obligations before enabling it; use

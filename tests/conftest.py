@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 TMP = Path(tempfile.mkdtemp(prefix="audit_test_"))
 os.environ["AUDIT_DATA_DIR"] = str(TMP / "data")
 os.environ["AUDIT_EXTRACTION_MODE"] = "rules_only"
+os.environ["AUDIT_OCR"] = "off"   # the shared pack keeps its scanned invoice for manual entry; OCR has its own tests
 os.environ["AUDIT_ADMIN_PASSWORD"] = "Admin#12345"
 
 from samples.generate_samples import main as _gen  # noqa: E402

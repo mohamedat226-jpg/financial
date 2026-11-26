@@ -53,3 +53,9 @@ def test_business_days_use_ksa_weekend():
 ])
 def test_recon_category(status, D, J, K, expected):
     assert recon_category(status, D, J, K, 1.0) == expected
+
+
+def test_every_finding_code_has_arabic_procedure():
+    from audit_app.engine import PROC
+    from audit_app.findings_ar import PROC_AR
+    assert set(PROC) <= set(PROC_AR), sorted(set(PROC) - set(PROC_AR))

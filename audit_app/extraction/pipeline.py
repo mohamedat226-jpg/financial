@@ -25,6 +25,20 @@ def overall_confidence(fields: dict) -> float:
     return round(sum(fields.get(k, {}).get("confidence", 0) * w for k, w in KEY_FIELDS.items()) / tot, 3)
 
 
+OCR_NOTE = "Read by OCR (Tesseract) from a scanned image - agree key values to the image"
+
+
+def _ocr_confidence(doc: DocText, f: dict) -> float | None:
+    """Lowest Tesseract confidence among the OCR words inside the field's bounding box (its source text)."""
+    bb, pg = f.get("bbox"), f.get("page")
+    if not bb or not pg:
+        return None
+    x0, top, x1, bottom = bb
+    confs = [w.conf for ln in doc.lines if ln.page == pg for w in ln.words
+             if w.x0 < x1 + 1 and w.x1 > x0 - 1 and w.top < bottom + 1 and w.bottom > top - 1]
+    return round(min(confs), 3) if confs else None
+
+
 def _locate(doc: DocText | None, text: str | None, page: int | None):
     """Find bbox of AI-quoted source text in the text layer, for traceability."""
     if not doc or not text or not doc.has_text_layer:
@@ -110,7 +124,9 @@ def run(pdf_path: str) -> dict:
         except llm.AIUnavailable as e:
             notes.append(f"AI extraction not performed: {e}")
     elif want_ai:
-        if not doc.has_text_layer:
+        if doc.ocr_used:
+            pass   # reported below with the OCR note
+        elif not doc.has_text_layer:
             notes.append("Scanned document without text layer and AI/OCR not configured - manual data entry required")
         else:
             notes.append("Low rule-engine confidence; AI cross-check not configured")
@@ -141,6 +157,17 @@ def run(pdf_path: str) -> dict:
                          "alternatives": [{"method": "rule", "value": r["value"]}, {"method": "ai", "value": a["value"]}]}
     for k in FIELDS:
         fields.setdefault(k, _empty())
+
+    if doc.ocr_used:
+        notes.append(OCR_NOTE)
+        for k, f in fields.items():
+            if f.get("value") is not None and f.get("method") in ("rule", "derived"):
+                oc = _ocr_confidence(doc, f)
+                f["method"] = "ocr" if f.get("method") == "rule" else f["method"]
+                if oc is not None:
+                    # a value can never be more certain than the OCR reading it was taken from
+                    f["confidence"] = round(min(f["confidence"], oc), 3)
+                    f["ocr_confidence"] = oc
 
     qr = None
     try:

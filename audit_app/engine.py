@@ -425,6 +425,7 @@ PROC = {
     "FX_MISSING": "Enter the authorised exchange rate for the currency (source: SAMA / approved policy rate) in engagement settings.",
     "VAT_RECALC": "Recalculate VAT at the applicable rate; investigate rounding or rate error; consider VAT return impact.",
     "VAT_ARITHMETIC_ERROR": "Re-perform invoice arithmetic (taxable + VAT = total, tolerance SAR 0.05) and discuss errors with the client.",
+    "OCR_READ": "Agree the key values (number, date, customer, amounts) to the scanned image and confirm them; OCR can misread characters.",
     "HIJRI_DATE": "Agree the Hijri date to the original invoice and confirm the Gregorian equivalent (Umm al-Qura) before using it for period / cut-off testing.",
     "ZATCA_QR_MISSING": "Confirm whether the invoice should carry a ZATCA QR code under the e-invoicing phase applicable to the seller and invoice type; obtain the FATOORA-generated invoice.",
     "ZATCA_QR_INVALID": "Obtain the original e-invoice (XML / FATOORA copy); a malformed QR may indicate a non-compliant or altered document.",
@@ -555,6 +556,10 @@ def run_checks(eid: int, low_conf: float | None = None) -> list[dict]:
             add(_f("HIJRI_DATE", "Low", dn, "Invoice dated in the Hijri calendar; Gregorian date derived by conversion", p("invoice_date"),
                    ar=((f"التاريخ الهجري {hm.group(1)} هـ حُوِّل إلى {hm.group(2)} (تقويم أم القرى) - يتطلب تأكيد المراجع" if hm else None),
                        "الفاتورة مؤرخة بالتقويم الهجري، والتاريخ الميلادي مستنتج بالتحويل")))
+        if inv.get("extraction_method") == "ocr" and inv["status"] != "needs_manual" \
+                and not all(((F.get(k) or {}).get("confirmed") or (F.get(k) or {}).get("method") == "auditor") for k in REQUIRED):
+            add(_f("OCR_READ", "Low", "Invoice read by OCR from a scanned image; key values not yet agreed to the image",
+                   "OCR reading of a scanned document is less reliable evidence than a text-based PDF (ISA 500)", doc))
         for qf in _qr_checks(inv, r, doc):
             add(qf)
         if inv["doc_type"] in ("proforma", "quotation"):
