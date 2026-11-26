@@ -139,3 +139,20 @@ def test_row_risk_matches_open_findings(processed):
         assert r["open_findings"] == len(risks)
         assert r["risk"] == (min(risks, key=order.get) if risks else None)
     assert any(r["risk"] == "High" for r in rows) and any(r["risk"] is None for r in rows)
+
+
+def test_every_finding_has_arabic_wording(processed):
+    """Arabic observation, reason and procedure are stored next to the English record for every finding."""
+    c, eid, _ = processed
+    findings = c.get(f"/api/engagements/{eid}/findings").json()
+    assert findings
+    arabic = lambda s: bool(s) and any("؀" <= ch <= "ۿ" for ch in s)
+    missing = [(f["code"], k) for f in findings for k in ("observation_ar", "reason_ar", "procedure_ar") if not arabic(f.get(k))]
+    assert not missing, missing
+    assert all(f["observation"][:1].isascii() and f["observation"][:1].isalpha() for f in findings)   # English record unchanged
+
+
+def test_arabic_suggested_explanation(processed):
+    c, eid, _ = processed
+    r9 = _by_no(_rows(c, eid)["rows"], "INV-2025-0009")[0]          # ledger includes VAT
+    assert "include VAT" in r9["suggestion"] and "يشمل ضريبة القيمة المضافة" in r9["suggestion_ar"]

@@ -157,3 +157,65 @@ window.STATUS_LABELS = {
     m_derived: "آلي · محسوبة", m_ocr: "آلي · OCR", m_none: "لم تُستخرج",
   },
 };
+
+/* Short UI messages (toasts, prompts, confirmations). */
+window.MSG = {
+  en: {
+    savedRecalc: "Saved – matching and checks recalculated", rateSaved: "Rate saved", uploading: "Uploading {n} file(s)…",
+    accepted: "{n} accepted", rejected: "{n} rejected", reviewerNote: "Reviewer note (required to clear):",
+    savedRecalc2: "Saved – recalculated", valuesConfirmed: "Values confirmed", reasonConfirmMatch: "Reason / evidence for confirming this match:",
+    reasonRejectMatch: "Reason for rejecting proposed matches:", aliasConfirmed: "Alias confirmed for all invoices of this customer",
+    fxPrompt: "Invoice-specific exchange rate (blank to remove):", fxReason: "Reason / source:",
+    reviewSuggestion: "Review the text, then Save to confirm it", saved: "Saved", reviewUpdated: "Review status updated",
+    reextract: "Queued for re-extraction (auditor values are kept)", excludeReason: "Reason for excluding from the population (file is retained):",
+    finaliseConfirm: "Finalise and lock this working paper?", finalised: "Finalised", reopenReason: "Reason for re-opening:",
+    pages: "page(s)", defaultEditReason: "Corrected to agree with source document",
+  },
+  ar: {
+    savedRecalc: "حُفظ – أُعيدت المطابقة والفحوص", rateSaved: "حُفظ سعر الصرف", uploading: "جارٍ رفع {n} ملف…",
+    accepted: "قُبل {n}", rejected: "رُفض {n}", reviewerNote: "ملاحظة المراجع (مطلوبة للإقفال):",
+    savedRecalc2: "حُفظ – أُعيد الاحتساب", valuesConfirmed: "أُكِّدت القيم", reasonConfirmMatch: "سبب تأكيد هذه المطابقة أو الدليل عليها:",
+    reasonRejectMatch: "سبب رفض المطابقات المقترحة:", aliasConfirmed: "أُكِّد الاسم البديل لكل فواتير هذا العميل",
+    fxPrompt: "سعر صرف خاص بهذه الفاتورة (اتركه فارغًا للإزالة):", fxReason: "السبب أو المصدر:",
+    reviewSuggestion: "راجع النص ثم اضغط «حفظ» لتأكيده", saved: "حُفظ", reviewUpdated: "حُدّثت حالة المراجعة",
+    reextract: "أُضيفت لإعادة الاستخراج (تبقى القيم التي أدخلها المراجع)", excludeReason: "سبب الاستبعاد من المجتمع (يُحتفظ بالملف):",
+    finaliseConfirm: "اعتماد ورقة العمل نهائيًا وإقفالها؟", finalised: "اعتُمدت نهائيًا", reopenReason: "سبب إعادة الفتح:",
+    pages: "صفحة", defaultEditReason: "صُحّح ليطابق المستند الأصلي",
+  },
+};
+
+/* Arabic rendering of notes produced by the extraction engine (stored in English for the audit trail).
+   Each entry: [pattern, replacement]. Unmatched notes are shown unchanged. */
+window.NOTE_AR = [
+  [/^ZATCA QR found on page (\d+) \(phase (\d), valid TLV\)$/, "عُثر على رمز QR (ZATCA) في الصفحة $1 (المرحلة $2، صيغة TLV صالحة)"],
+  [/^ZATCA QR found on page (\d+) \(phase (\d), INVALID TLV\)$/, "عُثر على رمز QR (ZATCA) في الصفحة $1 (المرحلة $2، صيغة TLV غير صالحة)"],
+  [/^No QR code detected on the invoice$/, "لم يُعثر على رمز QR في الفاتورة"],
+  [/^ZATCA QR not checked \(QR detector not installed\)$/, "لم يُفحص رمز QR (أداة القراءة غير مثبتة)"],
+  [/^ZATCA QR detection failed: (.*)$/, "تعذّرت قراءة رمز QR: $1"],
+  [/^Scanned document without text layer and AI\/OCR not configured - manual data entry required$/,
+    "مستند ممسوح ضوئيًا بلا طبقة نصية، والاستخراج بالذكاء الاصطناعي أو OCR غير مُعدّ - يلزم الإدخال اليدوي"],
+  [/^Low rule-engine confidence; AI cross-check not configured$/, "ثقة منخفضة في محرك القواعد، والتحقق بالذكاء الاصطناعي غير مُعدّ"],
+  [/^AI extraction not performed: (.*)$/, "لم يُنفَّذ الاستخراج بالذكاء الاصطناعي: $1"],
+  [/^Invoice totals could not be fully reconciled \(taxable \+ VAT = total\)$/, "تعذّرت مطابقة إجماليات الفاتورة بالكامل (الخاضع للضريبة + الضريبة = الإجمالي)"],
+  [/^Ambiguous numeric date interpreted as DD\/MM\/YYYY$/, "تاريخ رقمي محتمل لأكثر من قراءة، فُسِّر على أنه يوم/شهر/سنة"],
+  [/^Date interpreted as MM\/DD\/YYYY \(day > 12\)$/, "فُسِّر التاريخ على أنه شهر/يوم/سنة (اليوم أكبر من 12)"],
+  [/^Hijri date (\S+) AH converted to (\S+) \(Umm al-Qura calendar\) - auditor confirmation required$/,
+    "التاريخ الهجري $1 هـ حُوِّل إلى $2 (تقويم أم القرى) - يتطلب تأكيد المراجع"],
+  [/^Hijri date detected - could not be converted.*$/, "تاريخ هجري تعذّر تحويله (تاريخ غير صحيح أو أداة التحويل غير مثبتة) - أدخل التاريخ الميلادي يدويًا"],
+  [/^Invalid calendar date$/, "تاريخ غير صحيح في التقويم"],
+  [/^Unlabelled date - verify it is the invoice date$/, "تاريخ بلا عنوان - تحقّق من أنه تاريخ الفاتورة"],
+  [/^Taken from document header - verify$/, "مأخوذ من رأس المستند - يُرجى التحقق"],
+  [/^Multiple currencies on document: (.*)$/, "أكثر من عملة في المستند: $1"],
+  [/^Currency not stated on document$/, "العملة غير مذكورة في المستند"],
+  [/^Subtotal (\S+) less discount (\S+)$/, "المجموع الفرعي $1 ناقصًا الخصم $2"],
+  [/^Not arithmetically verified against VAT and total$/, "لم يُتحقق منه حسابيًا مقابل الضريبة والإجمالي"],
+  [/^Sum of line items - no labelled totals found$/, "مجموع البنود - لم تُعثر على إجماليات معنونة"],
+  [/^Sum of (\d+) line items$/, "مجموع $1 بنود"],
+  [/^Multiple line items - see line item detail$/, "عدة بنود - انظر تفاصيل البنود"],
+  [/^Rate computed from VAT \/ taxable amount$/, "النسبة محسوبة من الضريبة ÷ المبلغ الخاضع للضريبة"],
+  [/^Gross derived as taxable \+ VAT \(no labelled total found\)$/, "الإجمالي محسوب = الخاضع للضريبة + الضريبة (لم يُعثر على إجمالي معنون)"],
+  [/^VAT derived as gross - taxable$/, "الضريبة محسوبة = الإجمالي − الخاضع للضريبة"],
+  [/^Taxable back-calculated from gross at (\S+)% - must be verified$/, "الخاضع للضريبة محسوب عكسيًا من الإجمالي بنسبة $1% - يجب التحقق منه"],
+  [/^Rule engine read '(.*)', AI read '(.*)' - auditor to resolve$/, "قرأ محرك القواعد «$1» وقرأ الذكاء الاصطناعي «$2» - يحسم المراجع الخلاف"],
+  [/^AI: (.*)$/, "الذكاء الاصطناعي: $1"],
+];

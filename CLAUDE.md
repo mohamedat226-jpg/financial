@@ -21,7 +21,9 @@ FastAPI backend + single-page UI (vanilla JS, EN/AR with RTL) in `audit_app/`. T
 8. **Reports state facts only.** The executive report never writes an audit conclusion; AI explanations are labelled unconfirmed.
 9. **Low confidence.** Fields below `AUDIT_LOW_CONFIDENCE` (default 0.85) raise `LOW_CONFIDENCE` until confirmed.
 10. **PDFium is not thread-safe.** Wrap every `pypdfium2` call in `extraction.pdf_text.PDFIUM_LOCK`.
-11. **Bilingual UI.** Every new string needs both `en` and `ar` entries in `static/i18n.js`.
+11. **Bilingual UI.** Every new string needs both `en` and `ar` entries in `static/i18n.js` (labels in `STATUS_LABELS`,
+    messages in `MSG`, engine notes in `NOTE_AR`). A new finding needs Arabic wording: `PROC_AR` (and `STATIC_AR`, or an
+    `ar=(observation, reason)` argument to `_f`) in `audit_app/findings_ar.py`. The English text stays the audit record.
 12. **Report after each phase:** commands run with exit codes, files changed, errors and fixes, and acceptance
     criteria with evidence (pass/fail).
 
